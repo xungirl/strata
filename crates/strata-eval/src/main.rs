@@ -29,7 +29,8 @@ use strata_core::{
 use strata_eval::beir::Dataset;
 use strata_eval::harness::{mean_std, read_trec_run, write_trec_run, LatencyStats};
 use strata_eval::metrics::{evaluate, Evaluation, Run};
-use strata_storage::{Index, IndexConfig, Snapshot, SnapshotHit};
+use strata_query::{BoolQuery, Clause};
+use strata_storage::{Document, FieldValue, Fields, Index, IndexConfig, Snapshot, SnapshotHit};
 
 /// The index built for one repeat.
 enum Built {
@@ -117,6 +118,35 @@ struct RunArgs {
     /// Disk engine: merge down to one segment after ingest.
     #[arg(long)]
     force_merge: bool,
+    /// Disk engine: `taat` (exhaustive term-at-a-time, stage 2), `wand`
+    /// (block-max WAND, stage 3) or `maxscore` (MaxScore, stage 3).
+    #[arg(long, value_enum, default_value_t = Strat::Taat)]
+    strategy: Strat,
+    /// Disk engine: attach a synthetic `bucket` field (FNV-1a(id) % 100).
+    #[arg(long)]
+    bucket_field: bool,
+    /// Disk engine: filter in query syntax, e.g. "bucket:[0 TO 9]".
+    #[arg(long)]
+    filter: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, ValueEnum, Serialize)]
+enum Strat {
+    Taat,
+    Wand,
+    Maxscore,
+}
+
+/// Average WAND work per query in one repeat.
+#[derive(Serialize, Clone)]
+struct WandWork {
+    /// Docs fully scored per query at k = --hits.
+    docs_scored_per_query_k: f64,
+    /// ... and at k = 10.
+    docs_scored_per_query_k10: f64,
+    /// Sum of query-term document frequencies per query (= docs an
+    /// exhaustive scorer touches, counting a doc once per term).
+    postings_per_query: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, ValueEnum, Serialize)]
@@ -187,10 +217,23 @@ impl RunArgs {
             let engine = match self.engine {
                 Engine::Memory => "strata".to_string(),
                 Engine::Disk => format!(
-                    "strata-disk.f{}.m{}{}",
+                    "strata-disk.f{}.m{}{}{}{}{}",
                     self.flush_docs,
                     self.merge_factor,
-                    if self.force_merge { ".fm" } else { "" }
+                    if self.force_merge { ".fm" } else { "" },
+                    match self.strategy {
+                        Strat::Taat => "",
+                        Strat::Wand => ".wand",
+                        Strat::Maxscore => ".maxscore",
+                    },
+                    if self.bucket_field { ".bucket" } else { "" },
+                    match &self.filter {
+                        Some(f) => format!(
+                            ".filter-{}",
+                            f.replace(|c: char| !c.is_ascii_alphanumeric(), "_")
+                        ),
+                        None => String::new(),
+                    }
                 ),
             };
             format!("{engine}.k1_{}.b_{}.{dl}.{stem}.{stop}", self.k1, self.b)
@@ -203,6 +246,8 @@ impl RunArgs {
 struct Report {
     engine: Engine,
     disk: Option<DiskStats>,
+    /// Per repeat (WAND only).
+    wand_work: Vec<WandWork>,
     dataset: String,
     tag: String,
     analyzer: AnalyzerConfig,
@@ -320,11 +365,19 @@ fn build_disk_index(
     let (index, _) = Index::open(dir, cfg)?;
     let mut fsyncs = 0;
     for chunk in ds.corpus.chunks(args.batch.max(1)) {
-        let docs: Vec<(String, String)> = chunk
+        let docs: Vec<Document> = chunk
             .iter()
-            .map(|d| (d.id.clone(), d.flat_text()))
+            .map(|d| Document {
+                id: d.id.clone(),
+                text: d.flat_text(),
+                fields: if args.bucket_field {
+                    bucket_fields(&d.id)
+                } else {
+                    Fields::new()
+                },
+            })
             .collect();
-        index.add_documents(&docs)?;
+        index.add_docs(&docs)?;
         fsyncs += 1;
     }
     index.commit()?;
@@ -363,6 +416,19 @@ fn dir_size(dir: &Path) -> Result<u64> {
         };
     }
     Ok(total)
+}
+
+/// Synthetic metadata for filter benchmarks: `bucket` = FNV-1a(id) mod 100,
+/// so `bucket:[0 TO s-1]` keeps a pseudo-random s% of the corpus.
+fn bucket_fields(id: &str) -> Fields {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in id.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    let mut f = Fields::new();
+    f.insert("bucket".into(), FieldValue::Int((h % 100) as i64));
+    f
 }
 
 /// 1-minute load average via `sysctl -n vm.loadavg` (macOS), or NaN.
@@ -433,6 +499,7 @@ fn run(args: RunArgs) -> Result<()> {
 
     let analyzer = Analyzer::new(config.clone());
     let mut disk_stats: Option<DiskStats> = None;
+    let mut work: Vec<WandWork> = Vec::new();
     let mut repeats = Vec::new();
     let mut first: Option<(Run, IndexStats)> = None;
     for r in 0..args.repeats.max(1) {
@@ -474,12 +541,69 @@ fn run(args: RunArgs) -> Result<()> {
                 (run, lat, lat10)
             }
             Built::Disk(snap) => {
-                let search = |q: &Query, k: usize| snap.search(q, params, k);
+                let filters = match &args.filter {
+                    Some(f) => strata_query::parse(f, &analyzer)?.filters,
+                    None => Vec::new(),
+                };
+                let wand_work = std::cell::RefCell::new((0u64, 0u64));
+                let search = |q: &Query, k: usize| -> Vec<SnapshotHit> {
+                    match args.strategy {
+                        Strat::Taat if filters.is_empty() => snap.search(q, params, k),
+                        Strat::Taat => {
+                            let bq = BoolQuery {
+                                should: q
+                                    .terms()
+                                    .iter()
+                                    .map(|t| Clause::Term {
+                                        term: t.term.clone(),
+                                        count: t.count,
+                                    })
+                                    .collect(),
+                                filters: filters.clone(),
+                                ..Default::default()
+                            };
+                            strata_query::search(
+                                snap,
+                                &bq,
+                                params,
+                                k,
+                                strata_query::Strategy::Exhaustive,
+                            )
+                            .expect("query")
+                        }
+                        Strat::Wand | Strat::Maxscore => {
+                            let terms: Vec<(String, u32)> = q
+                                .terms()
+                                .iter()
+                                .map(|t| (t.term.clone(), t.count))
+                                .collect();
+                            let (hits, st) = if args.strategy == Strat::Wand {
+                                strata_query::wand_search(snap, &terms, &filters, params, k)
+                            } else {
+                                strata_query::maxscore_search(snap, &terms, &filters, params, k)
+                            };
+                            let mut w = wand_work.borrow_mut();
+                            w.0 += st.docs_scored;
+                            w.1 += st.postings_total;
+                            hits
+                        }
+                    }
+                };
                 let resolve =
                     |h: &SnapshotHit| (snap.external_id(h).to_string(), f64::from(h.score));
                 let (run, lat) =
                     run_queries(&ds, &analyzer, args.hits, remove_self_hits, search, resolve);
+                let (scored_k, postings_k) = *wand_work.borrow();
                 let (_, lat10) = run_queries(&ds, &analyzer, 10, remove_self_hits, search, resolve);
+                let (scored_all, _) = *wand_work.borrow();
+                if args.strategy != Strat::Taat {
+                    work.push(WandWork {
+                        docs_scored_per_query_k: scored_k as f64 / ds.queries.len() as f64,
+                        docs_scored_per_query_k10: (scored_all - scored_k) as f64
+                            / ds.queries.len() as f64,
+                        postings_per_query: postings_k as f64 / ds.queries.len() as f64,
+                    });
+                }
                 (run, lat, lat10)
             }
         };
@@ -553,6 +677,7 @@ fn run(args: RunArgs) -> Result<()> {
     let report = Report {
         engine: args.engine,
         disk: disk_stats,
+        wand_work: work,
         dataset: ds.name.clone(),
         tag: tag.clone(),
         analyzer: config,
