@@ -1,0 +1,7 @@
+results/runs/scidocs/strata.k1_0.9.b_0.4.exactlen.porter.lucenestop.trec vs results/stage3/runs/scidocs/strata-disk.f10000.m4.fm.maxscore.k1_0.9.b_0.4.exactlen.porter.lucenestop.trec
+queries compared: 1000 (only in A: 0, only in B: 0)
+identical top-1000 lists: 1000/1000 (100.0%)
+identical top-1000 sets:  1000/1000 (100.0%)
+mean overlap@1000: 1.0000
+max |score diff| on shared top-1000 docs: 0
+run files byte-identical (qid, docid, rank, score columns): YES

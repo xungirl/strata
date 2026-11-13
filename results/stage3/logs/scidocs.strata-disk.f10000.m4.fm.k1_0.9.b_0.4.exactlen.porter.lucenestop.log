@@ -1,0 +1,7 @@
+# uptime:  0:24  up 65 days, 24 mins, 3 users, load averages: 2.99 3.45 4.16
+[scidocs] loaded 25657 docs, 1000 queries in 0.17s
+[scidocs] repeat 1: index 1.895s (13540 docs/s, analysis-only 0.895s), queries p50 361us p99 673us, k=10 p50 145us p99 416us
+[scidocs] repeat 2: index 1.904s (13472 docs/s, analysis-only 0.903s), queries p50 365us p99 673us, k=10 p50 142us p99 411us
+[scidocs] repeat 3: index 1.924s (13337 docs/s, analysis-only 0.908s), queries p50 359us p99 649us, k=10 p50 146us p99 414us
+wrote results/stage3/scidocs/strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop.json and results/stage3/runs/scidocs/strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop.trec
+scidocs	strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.1498	R@100=0.3473	R@1000=0.5638	MRR@10=0.2604	docs/s=13450±103	p50=362us	p99=665us	k10_p50=144us	k10_p99=414us

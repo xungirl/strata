@@ -1,0 +1,127 @@
+[
+  {
+    "query_type": "disjunction",
+    "queries": 50,
+    "p50_us": [
+      1239.333,
+      714.667,
+      699.666
+    ],
+    "p99_us": [
+      6284.8330000000005,
+      2893.792,
+      2880.25
+    ],
+    "mean_us": [
+      1632.6276200000002,
+      804.8467199999999,
+      783.7308400000001
+    ],
+    "avg_hits": 10.0,
+    "examples": [
+      "what origin covid",
+      "how does coronavirus respond changes weather",
+      "sars infected people develop immunity cross protection possible"
+    ]
+  },
+  {
+    "query_type": "phrase",
+    "queries": 50,
+    "p50_us": [
+      209.583,
+      206.375,
+      205.542
+    ],
+    "p99_us": [
+      1537.25,
+      1523.9579999999999,
+      1518.75
+    ],
+    "mean_us": [
+      300.38915999999995,
+      295.61670000000004,
+      296.76754
+    ],
+    "avg_hits": 7.68,
+    "examples": [
+      "\"what origin\"",
+      "\"how does\"",
+      "\"sars infected\""
+    ]
+  },
+  {
+    "query_type": "prefix",
+    "queries": 50,
+    "p50_us": [
+      790.042,
+      803.958,
+      819.458
+    ],
+    "p99_us": [
+      18656.417,
+      18559.915999999997,
+      18588.416
+    ],
+    "mean_us": [
+      2563.0891,
+      2564.06752,
+      2564.19908
+    ],
+    "avg_hits": 10.0,
+    "examples": [
+      "orig*",
+      "coro*",
+      "prot*"
+    ]
+  },
+  {
+    "query_type": "boolean",
+    "queries": 50,
+    "p50_us": [
+      278.042,
+      287.625,
+      284.625
+    ],
+    "p99_us": [
+      1188.667,
+      1229.0,
+      1227.25
+    ],
+    "mean_us": [
+      383.00068,
+      393.42842,
+      399.34586
+    ],
+    "avg_hits": 10.0,
+    "examples": [
+      "+what origin -covid",
+      "+how doe -coronaviru",
+      "+sar infect -peopl"
+    ]
+  },
+  {
+    "query_type": "filtered",
+    "queries": 50,
+    "p50_us": [
+      999.167,
+      1010.7499999999999,
+      992.209
+    ],
+    "p99_us": [
+      3961.75,
+      3926.0,
+      3905.334
+    ],
+    "mean_us": [
+      1172.60174,
+      1157.6558400000001,
+      1156.9825
+    ],
+    "avg_hits": 10.0,
+    "examples": [
+      "what origin covid bucket:[0 TO 9]",
+      "how does coronavirus respond changes weather bucket:[0 TO 9]",
+      "sars infected people develop immunity cross protection possible bucket:[0 TO 9]"
+    ]
+  }
+]

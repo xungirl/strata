@@ -1,0 +1,100 @@
+   maxscore    332us | WandStats { postings_total: 128322, docs_scored: 717, block_skips: 0, iterations: 7346 }
+  8338us taat    921us wand | WandStats { postings_total: 128322, docs_scored: 1981, block_skips: 907, iterations: 9905 } | terms ["19:60168", "covid:58057", "origin:5482", "what:4615"]
+   maxscore    517us | WandStats { postings_total: 68679, docs_scored: 429, block_skips: 0, iterations: 11922 }
+  2965us taat   1099us wand | WandStats { postings_total: 68679, docs_scored: 1184, block_skips: 1498, iterations: 13323 } | terms ["chang:15043", "coronaviru:35095", "doe:3901", "how:10315", "respond:4013", "weather:312"]
+   maxscore   1385us | WandStats { postings_total: 160103, docs_scored: 218, block_skips: 0, iterations: 29449 }
+  7501us taat   3613us wand | WandStats { postings_total: 160103, docs_scored: 1513, block_skips: 3961, iterations: 23085 } | terms ["cov2:903", "cross:6040", "develop:31284", "immun:12970", "infect:50384", "peopl:7883", "possibl:12849", "protect:12548", "sar:25242"]
+   maxscore    778us | WandStats { postings_total: 227952, docs_scored: 345, block_skips: 0, iterations: 17147 }
+  4346us taat   2677us wand | WandStats { postings_total: 227952, docs_scored: 2352, block_skips: 1252, iterations: 19674 } | terms ["19:60168", "caus:25630", "covid:58057", "death:10249", "from:69233", "what:4615"]
+   maxscore   3203us | WandStats { postings_total: 286127, docs_scored: 298, block_skips: 0, iterations: 37899 }
+  7932us taat   7857us wand | WandStats { postings_total: 286127, docs_scored: 2386, block_skips: 4743, iterations: 28099 } | terms ["2:41209", "activ:20008", "against:14151", "anim:9027", "been:34435", "cov:22147", "drug:9928", "have:47487", "sar:25242", "studi:57878", "what:4615"]
+   maxscore   2750us | WandStats { postings_total: 280918, docs_scored: 345, block_skips: 0, iterations: 46160 }
+  4580us taat   8390us wand | WandStats { postings_total: 280918, docs_scored: 2763, block_skips: 6228, iterations: 35163 } | terms ["19:60168", "been:34435", "covid:58057", "develop:31284", "have:47487", "rapid:8296", "test:22256", "type:14320", "what:4615"]
+   maxscore    384us | WandStats { postings_total: 87291, docs_scored: 433, block_skips: 0, iterations: 4859 }
+  2036us taat    929us wand | WandStats { postings_total: 87291, docs_scored: 1002, block_skips: 583, iterations: 5596 } | terms ["antibodi:8570", "coronaviru:35095", "detect:19126", "serolog:2244", "test:22256"]
+   maxscore   1778us | WandStats { postings_total: 225846, docs_scored: 328, block_skips: 0, iterations: 29043 }
+  4448us taat   4979us wand | WandStats { postings_total: 225846, docs_scored: 1930, block_skips: 3652, iterations: 26768 } | terms ["19:60168", "avail:14811", "covid:58057", "ha:42792", "how:10315", "incid:6273", "lack:6253", "led:3741", "test:22256", "true:1093", "underreport:87"]
+   maxscore    615us | WandStats { postings_total: 184679, docs_scored: 271, block_skips: 0, iterations: 12893 }
+  2094us taat   1844us wand | WandStats { postings_total: 184679, docs_scored: 1220, block_skips: 864, iterations: 13279 } | terms ["19:60168", "affect:12305", "canada:1042", "covid:58057", "ha:42792", "how:10315"]
+   maxscore    975us | WandStats { postings_total: 223570, docs_scored: 193, block_skips: 0, iterations: 14363 }
+  4038us taat   3123us wand | WandStats { postings_total: 223570, docs_scored: 1202, block_skips: 2190, iterations: 13394 } | terms ["19:60168", "covid:58057", "distanc:4344", "ha:42792", "had:21064", "impact:14433", "slow:1383", "social:7790", "spread:13539"]
+   maxscore    538us | WandStats { postings_total: 148022, docs_scored: 288, block_skips: 0, iterations: 7170 }
+  3299us taat   1443us wand | WandStats { postings_total: 148022, docs_scored: 927, block_skips: 779, iterations: 8301 } | terms ["coronaviru:35095", "guidelin:4731", "infect:50384", "patient:52140", "triag:1057", "what:4615"]
+   maxscore    623us | WandStats { postings_total: 48297, docs_scored: 705, block_skips: 0, iterations: 16040 }
+  4294us taat   1191us wand | WandStats { postings_total: 48297, docs_scored: 1289, block_skips: 1517, iterations: 15767 } | terms ["best:4269", "home:3292", "hospit:19079", "maintain:4270", "practic:10329", "quarantin:2443", "what:4615"]
+   maxscore    334us | WandStats { postings_total: 54070, docs_scored: 432, block_skips: 0, iterations: 6823 }
+  1142us taat    670us wand | WandStats { postings_total: 54070, docs_scored: 1058, block_skips: 393, iterations: 9346 } | terms ["coronaviru:35095", "rout:2095", "transmiss:12265", "what:4615"]
+   maxscore    349us | WandStats { postings_total: 157104, docs_scored: 300, block_skips: 0, iterations: 6308 }
+  2111us taat    818us wand | WandStats { postings_total: 157104, docs_scored: 767, block_skips: 355, iterations: 6254 } | terms ["19:60168", "covid:58057", "evid:14674", "relat:19148", "spreader:127", "super:315", "what:4615"]
+   maxscore    877us | WandStats { postings_total: 98416, docs_scored: 580, block_skips: 0, iterations: 20269 }
+  2075us taat   1875us wand | WandStats { postings_total: 98416, docs_scored: 1781, block_skips: 1865, iterations: 20950 } | terms ["bodi:5392", "can:32044", "coronaviru:35095", "how:10315", "live:5483", "long:8344", "outsid:1743"]
+   maxscore    780us | WandStats { postings_total: 76760, docs_scored: 410, block_skips: 0, iterations: 19997 }
+  1533us taat   1724us wand | WandStats { postings_total: 76760, docs_scored: 1223, block_skips: 3614, iterations: 18445 } | terms ["coronaviru:35095", "doe:3901", "how:10315", "long:8344", "remain:11795", "stabl:2358", "surfac:4952"]
+   maxscore    801us | WandStats { postings_total: 101113, docs_scored: 913, block_skips: 0, iterations: 17629 }
+  1964us taat   1664us wand | WandStats { postings_total: 101113, docs_scored: 1993, block_skips: 1515, iterations: 18959 } | terms ["ani:8033", "avail:14811", "clinic:34599", "coronaviru:35095", "trial:8575"]
+   maxscore    740us | WandStats { postings_total: 196074, docs_scored: 236, block_skips: 0, iterations: 11987 }
+  5734us taat   2101us wand | WandStats { postings_total: 196074, docs_scored: 1274, block_skips: 1489, iterations: 13567 } | terms ["19:60168", "best:4269", "covid:58057", "infect:50384", "mask:2183", "prevent:16398", "what:4615"]
+   maxscore   1050us | WandStats { postings_total: 160976, docs_scored: 306, block_skips: 0, iterations: 12163 }
+  3921us taat   2093us wand | WandStats { postings_total: 160976, docs_scored: 1072, block_skips: 1351, iterations: 11724 } | terms ["19:60168", "covid:58057", "destroi:248", "hand:3202", "need:19987", "sanit:379", "type:14320", "what:4615"]
+   maxscore   1155us | WandStats { postings_total: 241213, docs_scored: 191, block_skips: 0, iterations: 5343 }
+ 14511us taat   4907us wand | WandStats { postings_total: 241213, docs_scored: 700, block_skips: 642, iterations: 5304 } | terms ["19:60168", "ac:924", "angiotensin:2176", "convert:2489", "covid:58057", "enzym:5078", "increas:27631", "inhibitor:4798", "patient:52140", "risk:23237", "take:4515"]
+   maxscore   1733us | WandStats { postings_total: 81267, docs_scored: 679, block_skips: 0, iterations: 24407 }
+ 11756us taat   2702us wand | WandStats { postings_total: 81267, docs_scored: 1645, block_skips: 2650, iterations: 20858 } | terms ["mortal:12114", "overal:7939", "popul:14948", "rate:19831", "specif:21820", "what:4615"]
+   maxscore    621us | WandStats { postings_total: 199359, docs_scored: 373, block_skips: 0, iterations: 12834 }
+  8788us taat   1791us wand | WandStats { postings_total: 199359, docs_scored: 1116, block_skips: 647, iterations: 10658 } | terms ["19:60168", "cardiac:2810", "complic:10912", "covid:58057", "like:15272", "patient:52140"]
+   maxscore    902us | WandStats { postings_total: 185151, docs_scored: 341, block_skips: 0, iterations: 19445 }
+ 10349us taat   2960us wand | WandStats { postings_total: 185151, docs_scored: 1570, block_skips: 2300, iterations: 18077 } | terms ["19:60168", "associ:29213", "complic:10912", "covid:58057", "hypertens:2159", "kind:879", "relat:19148", "what:4615"]
+   maxscore    984us | WandStats { postings_total: 185969, docs_scored: 307, block_skips: 0, iterations: 17931 }
+  3980us taat   2976us wand | WandStats { postings_total: 185969, docs_scored: 1260, block_skips: 1848, iterations: 16980 } | terms ["19:60168", "associ:29213", "complic:10912", "covid:58057", "diabet:2977", "kind:879", "relat:19148", "what:4615"]
+   maxscore   1039us | WandStats { postings_total: 195950, docs_scored: 247, block_skips: 0, iterations: 17319 }
+ 17200us taat   3071us wand | WandStats { postings_total: 195950, docs_scored: 1495, block_skips: 2662, iterations: 16906 } | terms ["2019:17205", "biomark:1473", "clinic:34599", "cours:4702", "infect:50384", "ncov:1685", "predict:9631", "sever:36964", "which:39307"]
+   maxscore    585us | WandStats { postings_total: 145697, docs_scored: 374, block_skips: 0, iterations: 15890 }
+  1844us taat   1699us wand | WandStats { postings_total: 145697, docs_scored: 1729, block_skips: 607, iterations: 16929 } | terms ["19:60168", "covid:58057", "initi:10887", "symptom:11970", "what:4615"]
+   maxscore    916us | WandStats { postings_total: 211326, docs_scored: 216, block_skips: 0, iterations: 19835 }
+  8821us taat   2895us wand | WandStats { postings_total: 211326, docs_scored: 1628, block_skips: 2942, iterations: 19333 } | terms ["19:60168", "about:11633", "asymptomat:3171", "covid:58057", "infect:50384", "known:9318", "those:13980", "what:4615"]
+   maxscore    714us | WandStats { postings_total: 158925, docs_scored: 426, block_skips: 0, iterations: 19216 }
+  4212us taat   1838us wand | WandStats { postings_total: 158925, docs_scored: 1199, block_skips: 1165, iterations: 16245 } | terms ["19:60168", "covid:58057", "evid:14674", "hydroxychloroquin:1375", "treat:11656", "valu:8380", "what:4615"]
+   maxscore   2561us | WandStats { postings_total: 316415, docs_scored: 194, block_skips: 0, iterations: 38331 }
+ 11918us taat   7009us wand | WandStats { postings_total: 316415, docs_scored: 1137, block_skips: 5388, iterations: 21907 } | terms ["2:41209", "approv:2645", "base:28057", "can:32044", "cov:22147", "drug:9928", "human:22660", "indic:15737", "inform:13727", "interact:8864", "potenti:23020", "protein:18054", "repurpos:837", "sar:25242", "target:12937", "which:39307"]
+   maxscore    341us | WandStats { postings_total: 180051, docs_scored: 957, block_skips: 0, iterations: 6230 }
+  3975us taat    761us wand | WandStats { postings_total: 180051, docs_scored: 1446, block_skips: 103, iterations: 4966 } | terms ["19:60168", "covid:58057", "effect:35166", "remdesivir:570", "treatment:26090"]
+   maxscore    693us | WandStats { postings_total: 152070, docs_scored: 135, block_skips: 0, iterations: 7938 }
+  8236us taat   2380us wand | WandStats { postings_total: 152070, docs_scored: 483, block_skips: 1287, iterations: 9802 } | terms ["coronaviru:35095", "differ:29856", "doe:3901", "flu:1101", "from:69233", "how:10315", "season:2569"]
+   maxscore   1198us | WandStats { postings_total: 159124, docs_scored: 255, block_skips: 0, iterations: 18470 }
+  4629us taat   3108us wand | WandStats { postings_total: 159124, docs_scored: 1454, block_skips: 4674, iterations: 18953 } | terms ["2:41209", "ani:8033", "cov:22147", "doe:3901", "have:47487", "sar:25242", "so:5195", "subtyp:1295", "what:4615"]
+   maxscore   1393us | WandStats { postings_total: 168519, docs_scored: 242, block_skips: 0, iterations: 18661 }
+126667us taat   2897us wand | WandStats { postings_total: 168519, docs_scored: 1160, block_skips: 1981, iterations: 17180 } | terms ["19:60168", "be:9343", "candid:3124", "covid:58057", "test:22256", "vaccin:10956", "what:4615"]
+   maxscore   1312us | WandStats { postings_total: 251582, docs_scored: 192, block_skips: 0, iterations: 29962 }
+  6011us taat   7249us wand | WandStats { postings_total: 251582, docs_scored: 1845, block_skips: 3622, iterations: 23864 } | terms ["19:60168", "complic:10912", "covid:58057", "from:69233", "longer:3019", "recov:2767", "term:11235", "those:13980", "what:4615", "who:17596"]
+   maxscore   2047us | WandStats { postings_total: 194761, docs_scored: 228, block_skips: 0, iterations: 27984 }
+  6528us taat   3718us wand | WandStats { postings_total: 194761, docs_scored: 1718, block_skips: 2925, iterations: 22455 } | terms ["19:60168", "avail:14811", "covid:58057", "dataset:1741", "new:22145", "public:14076", "relat:19148", "what:4615"]
+   maxscore   1179us | WandStats { postings_total: 126346, docs_scored: 426, block_skips: 0, iterations: 14030 }
+  4081us taat   1729us wand | WandStats { postings_total: 126346, docs_scored: 1115, block_skips: 981, iterations: 11974 } | terms ["2:41209", "cov:22147", "protein:18054", "sar:25242", "spike:3617", "structur:11462", "what:4615"]
+   maxscore   1805us | WandStats { postings_total: 198243, docs_scored: 193, block_skips: 0, iterations: 14859 }
+ 12476us taat   3127us wand | WandStats { postings_total: 198243, docs_scored: 874, block_skips: 1998, iterations: 11780 } | terms ["2:41209", "analysi:25119", "cov:22147", "genom:7719", "phylogenet:2410", "result:59773", "sar:25242", "sequenc:10009", "what:4615"]
+   maxscore   1043us | WandStats { postings_total: 202589, docs_scored: 213, block_skips: 0, iterations: 19424 }
+  5386us taat   4594us wand | WandStats { postings_total: 202589, docs_scored: 1548, block_skips: 2282, iterations: 20158 } | terms ["19:60168", "case:31104", "covid:58057", "inflammatori:6115", "mechan:14573", "pathogenesi:4453", "respons:23504", "what:4615"]
+   maxscore   1503us | WandStats { postings_total: 161815, docs_scored: 246, block_skips: 0, iterations: 8061 }
+  9211us taat   2294us wand | WandStats { postings_total: 161815, docs_scored: 1117, block_skips: 667, iterations: 7374 } | terms ["19:60168", "covid:58057", "cytokin:4060", "mechan:14573", "storm:1285", "syndrom:19057", "what:4615"]
+   maxscore   2361us | WandStats { postings_total: 154655, docs_scored: 198, block_skips: 0, iterations: 26756 }
+  4073us taat   3293us wand | WandStats { postings_total: 154655, docs_scored: 888, block_skips: 3999, iterations: 16256 } | terms ["2:41209", "cov:22147", "do:5383", "genom:7719", "how:10315", "mutat:3393", "observ:17238", "occur:11401", "often:5993", "sar:25242", "what:4615"]
+   maxscore   1637us | WandStats { postings_total: 274061, docs_scored: 199, block_skips: 0, iterations: 18420 }
+  3672us taat   5656us wand | WandStats { postings_total: 274061, docs_scored: 1229, block_skips: 3196, iterations: 17086 } | terms ["19:60168", "african:1200", "american:2167", "among:17237", "covid:58057", "differ:29856", "from:69233", "impact:14433", "popul:14948", "rest:1025", "u.:1122", "what:4615"]
+   maxscore    776us | WandStats { postings_total: 183503, docs_scored: 250, block_skips: 0, iterations: 10711 }
+  2324us taat   2421us wand | WandStats { postings_total: 183503, docs_scored: 645, block_skips: 1645, iterations: 9661 } | terms ["19:60168", "covid:58057", "d:3797", "doe:3901", "impact:14433", "prevent:16398", "treatment:26090", "vitamin:659"]
+   maxscore    846us | WandStats { postings_total: 255563, docs_scored: 314, block_skips: 0, iterations: 14101 }
+  3764us taat   2837us wand | WandStats { postings_total: 255563, docs_scored: 1068, block_skips: 2309, iterations: 12610 } | terms ["19:60168", "covid:58057", "crime:69", "ha:42792", "how:10315", "impact:14433", "includ:36218", "pandem:29318", "societi:3873", "violenc:279", "violent:41"]
+   maxscore   2203us | WandStats { postings_total: 231353, docs_scored: 230, block_skips: 0, iterations: 31635 }
+  2715us taat   4144us wand | WandStats { postings_total: 231353, docs_scored: 1786, block_skips: 4412, iterations: 23520 } | terms ["19:60168", "covid:58057", "do:5383", "have:47487", "how:10315", "impact:14433", "mask:2183", "much:3390", "prevent:16398", "spread:13539"]
+   maxscore   1159us | WandStats { postings_total: 246995, docs_scored: 267, block_skips: 0, iterations: 16816 }
+  2920us taat   3288us wand | WandStats { postings_total: 246995, docs_scored: 1434, block_skips: 1230, iterations: 15274 } | terms ["19:60168", "covid:58057", "ha:42792", "health:29022", "how:10315", "impact:14433", "mental:2890", "pandem:29318"]
+   maxscore    556us | WandStats { postings_total: 163779, docs_scored: 309, block_skips: 0, iterations: 8086 }
+  2303us taat   1469us wand | WandStats { postings_total: 163779, docs_scored: 716, block_skips: 735, iterations: 9218 } | terms ["19:60168", "covid:58057", "dexamethason:175", "evid:14674", "treatment:26090", "what:4615"]
+   maxscore   1540us | WandStats { postings_total: 194968, docs_scored: 268, block_skips: 0, iterations: 23517 }
+  2267us taat   4825us wand | WandStats { postings_total: 194968, docs_scored: 1519, block_skips: 1675, iterations: 21138 } | terms ["19:60168", "children:7133", "contract:1112", "covid:58057", "health:29022", "outcom:17265", "what:4615", "who:17596"]
+   maxscore    860us | WandStats { postings_total: 191533, docs_scored: 246, block_skips: 0, iterations: 18481 }
+  2624us taat   4448us wand | WandStats { postings_total: 191533, docs_scored: 1319, block_skips: 1464, iterations: 17607 } | terms ["19:60168", "benefit:5644", "covid:58057", "midst:275", "open:5773", "pandem:29318", "re:2814", "risk:23237", "school:1632", "what:4615"]
+   maxscore   3918us | WandStats { postings_total: 458120, docs_scored: 139, block_skips: 0, iterations: 47280 }
+  4534us taat  13756us wand | WandStats { postings_total: 458120, docs_scored: 1452, block_skips: 6376, iterations: 30312 } | terms ["19:60168", "antibodi:8570", "cell:23245", "covid:58057", "do:5383", "from:69233", "immun:12970", "includ:36218", "individu:11272", "infect:50384", "level:19163", "mediat:6600", "prevent:16398", "re:2814", "recov:2767", "respons:23504", "show:26060", "suffici:2379", "t:5339", "who:17596"]
+   maxscore   1339us | WandStats { postings_total: 161649, docs_scored: 319, block_skips: 0, iterations: 27434 }
+  1668us taat   3165us wand | WandStats { postings_total: 161649, docs_scored: 1508, block_skips: 2457, iterations: 22293 } | terms ["2:41209", "about:11633", "cov:22147", "known:9318", "mrna:2200", "sar:25242", "vaccin:10956", "viru:34329", "what:4615"]

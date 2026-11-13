@@ -1,0 +1,7 @@
+# uptime:  0:39  up 65 days, 39 mins, 3 users, load averages: 2.42 2.56 3.12
+[fiqa] loaded 57638 docs, 648 queries in 0.04s
+[fiqa] repeat 1: index 2.513s (22938 docs/s, analysis-only 1.157s), queries p50 1189us p99 3613us, k=10 p50 1071us p99 3512us
+[fiqa] repeat 2: index 2.528s (22800 docs/s, analysis-only 1.178s), queries p50 1187us p99 3592us, k=10 p50 1062us p99 3428us
+[fiqa] repeat 3: index 2.490s (23150 docs/s, analysis-only 1.178s), queries p50 1201us p99 3641us, k=10 p50 1064us p99 3445us
+wrote results/stage3/fiqa/strata-disk.f10000.m4.wand.bucket.filter-bucket__0_TO_0_.k1_0.9.b_0.4.exactlen.porter.lucenestop.json and results/stage3/runs/fiqa/strata-disk.f10000.m4.wand.bucket.filter-bucket__0_TO_0_.k1_0.9.b_0.4.exactlen.porter.lucenestop.trec
+fiqa	strata-disk.f10000.m4.wand.bucket.filter-bucket__0_TO_0_.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.0100	R@100=0.0101	R@1000=0.0103	MRR@10=0.0147	docs/s=22963±177	p50=1192us	p99=3615us	k10_p50=1066us	k10_p99=3462us

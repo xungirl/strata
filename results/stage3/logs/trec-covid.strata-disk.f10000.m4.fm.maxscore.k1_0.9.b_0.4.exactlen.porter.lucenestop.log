@@ -1,0 +1,7 @@
+# uptime:  0:30  up 65 days, 31 mins, 3 users, load averages: 2.69 2.90 3.63
+[trec-covid] loaded 171332 docs, 50 queries in 0.17s
+[trec-covid] repeat 1: index 11.500s (14899 docs/s, analysis-only 5.621s), queries p50 2318us p99 6670us, k=10 p50 797us p99 3004us
+[trec-covid] repeat 2: index 11.457s (14954 docs/s, analysis-only 5.559s), queries p50 2312us p99 6632us, k=10 p50 801us p99 3021us
+[trec-covid] repeat 3: index 11.584s (14790 docs/s, analysis-only 5.559s), queries p50 2312us p99 6990us, k=10 p50 828us p99 3537us
+wrote results/stage3/trec-covid/strata-disk.f10000.m4.fm.maxscore.k1_0.9.b_0.4.exactlen.porter.lucenestop.json and results/stage3/runs/trec-covid/strata-disk.f10000.m4.fm.maxscore.k1_0.9.b_0.4.exactlen.porter.lucenestop.trec
+trec-covid	strata-disk.f10000.m4.fm.maxscore.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.5943	R@100=0.1090	R@1000=0.3959	MRR@10=0.8562	docs/s=14881±83	p50=2314us	p99=6764us	k10_p50=809us	k10_p99=3187us

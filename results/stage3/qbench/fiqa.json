@@ -1,0 +1,127 @@
+[
+  {
+    "query_type": "disjunction",
+    "queries": 6648,
+    "p50_us": [
+      293.0,
+      296.375,
+      294.91700000000003
+    ],
+    "p99_us": [
+      1077.5839999999998,
+      1091.2910000000002,
+      1095.125
+    ],
+    "mean_us": [
+      343.1789324608905,
+      346.6248336341757,
+      346.8961589951865
+    ],
+    "avg_hits": 10.0,
+    "examples": [
+      "what considered business expense business trip",
+      "business expense car insurance deductible accident occurred during business trip",
+      "starting new online business"
+    ]
+  },
+  {
+    "query_type": "phrase",
+    "queries": 6644,
+    "p50_us": [
+      157.584,
+      157.542,
+      156.5
+    ],
+    "p99_us": [
+      796.1669999999999,
+      793.291,
+      793.208
+    ],
+    "mean_us": [
+      209.6035675797712,
+      208.78426791089706,
+      208.58538546056596
+    ],
+    "avg_hits": 7.114388922335942,
+    "examples": [
+      "\"what considered\"",
+      "\"business expense\"",
+      "\"starting new\""
+    ]
+  },
+  {
+    "query_type": "prefix",
+    "queries": 6646,
+    "p50_us": [
+      79.791,
+      78.70899999999999,
+      79.291
+    ],
+    "p99_us": [
+      1354.417,
+      1348.541,
+      1346.291
+    ],
+    "mean_us": [
+      175.70448630755342,
+      174.43903325308455,
+      174.73697396930484
+    ],
+    "avg_hits": 9.948841408365935,
+    "examples": [
+      "cons*",
+      "dedu*",
+      "busi*"
+    ]
+  },
+  {
+    "query_type": "boolean",
+    "queries": 6579,
+    "p50_us": [
+      258.708,
+      257.458,
+      258.66700000000003
+    ],
+    "p99_us": [
+      695.375,
+      691.042,
+      689.0
+    ],
+    "mean_us": [
+      265.67333941328474,
+      264.4370659674723,
+      265.29790834473323
+    ],
+    "avg_hits": 9.853625170998631,
+    "examples": [
+      "+what consid -busi",
+      "+busi expens -car",
+      "+start new -onlin"
+    ]
+  },
+  {
+    "query_type": "filtered",
+    "queries": 6648,
+    "p50_us": [
+      456.042,
+      456.167,
+      456.708
+    ],
+    "p99_us": [
+      1467.917,
+      1470.542,
+      1473.8329999999999
+    ],
+    "mean_us": [
+      514.1584769855596,
+      513.7222867027677,
+      516.2339748796632
+    ],
+    "avg_hits": 9.998044524669073,
+    "examples": [
+      "what considered business expense business trip bucket:[0 TO 9]",
+      "business expense car insurance deductible accident occurred during business trip bucket:[0 TO 9]",
+      "starting new online business bucket:[0 TO 9]"
+    ]
+  }
+]

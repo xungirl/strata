@@ -1,0 +1,7 @@
+# uptime:  0:20  up 65 days, 20 mins, 3 users, load averages: 3.68 3.47 4.36
+[nfcorpus] loaded 3633 docs, 323 queries in 0.01s
+[nfcorpus] repeat 1: index 0.348s (10437 docs/s, analysis-only 0.208s), queries p50 25us p99 203us, k=10 p50 6us p99 41us
+[nfcorpus] repeat 2: index 0.355s (10242 docs/s, analysis-only 0.178s), queries p50 23us p99 196us, k=10 p50 6us p99 41us
+[nfcorpus] repeat 3: index 0.364s (9988 docs/s, analysis-only 0.176s), queries p50 26us p99 204us, k=10 p50 6us p99 44us
+wrote results/stage3/nfcorpus/strata-disk.f10000.m4.k1_0.9.b_0.4.exactlen.porter.lucenestop.json and results/stage3/runs/nfcorpus/strata-disk.f10000.m4.k1_0.9.b_0.4.exactlen.porter.lucenestop.trec
+nfcorpus	strata-disk.f10000.m4.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.3202	R@100=0.2456	R@1000=0.3702	MRR@10=0.5215	docs/s=10222±225	p50=25us	p99=201us	k10_p50=6us	k10_p99=42us

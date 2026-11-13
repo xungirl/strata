@@ -1,0 +1,7 @@
+# uptime:  0:20  up 65 days, 20 mins, 3 users, load averages: 2.99 3.33 4.33
+[scifact] loaded 5183 docs, 300 queries in 0.01s
+[scifact] repeat 1: index 0.533s (9724 docs/s, analysis-only 0.224s), queries p50 219us p99 433us, k=10 p50 48us p99 188us
+[scifact] repeat 2: index 0.565s (9178 docs/s, analysis-only 0.249s), queries p50 221us p99 641us, k=10 p50 47us p99 122us
+[scifact] repeat 3: index 0.556s (9314 docs/s, analysis-only 0.260s), queries p50 222us p99 468us, k=10 p50 48us p99 231us
+wrote results/stage3/scifact/strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop.json and results/stage3/runs/scifact/strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop.trec
+scifact	strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.6777	R@100=0.9253	R@1000=0.9767	MRR@10=0.6445	docs/s=9406±284	p50=221us	p99=514us	k10_p50=48us	k10_p99=181us

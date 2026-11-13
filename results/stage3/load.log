@@ -1,0 +1,50 @@
+2026-11-13T08:20:21Z scifact --strategy taat load1=2.44 waited=0s ok
+2026-11-13T08:20:23Z scifact --strategy wand load1=2.44 waited=0s ok
+2026-11-13T08:20:26Z scifact --strategy maxscore load1=2.65 waited=0s ok
+2026-11-13T08:20:28Z scifact --strategy taat --force-merge load1=2.65 waited=0s ok
+2026-11-13T08:20:31Z scifact --strategy wand --force-merge load1=2.99 waited=0s ok
+2026-11-13T08:20:34Z scifact --strategy maxscore --force-merge load1=2.99 waited=0s ok
+2026-11-13T08:20:41Z nfcorpus --strategy taat load1=3.68 waited=0s ok
+2026-11-13T08:20:43Z nfcorpus --strategy wand load1=3.68 waited=0s ok
+2026-11-13T08:20:45Z nfcorpus --strategy maxscore load1=3.68 waited=0s ok
+2026-11-13T08:20:47Z nfcorpus --strategy taat --force-merge load1=3.79 waited=0s ok
+2026-11-13T08:20:49Z nfcorpus --strategy wand --force-merge load1=3.79 waited=0s ok
+2026-11-13T08:20:51Z nfcorpus --strategy maxscore --force-merge load1=3.73 waited=0s ok
+2026-11-13T08:20:54Z fiqa --strategy taat load1=3.73 waited=0s ok
+2026-11-13T08:21:09Z fiqa --strategy wand load1=3.97 waited=0s ok
+2026-11-13T08:21:25Z fiqa --strategy maxscore load1=3.47 waited=0s ok
+2026-11-13T08:21:41Z fiqa --strategy taat --force-merge load1=3.51 waited=0s ok
+2026-11-13T08:22:28Z fiqa --strategy wand --force-merge load1=3.25 waited=30s ok
+2026-11-13T08:22:47Z fiqa --strategy maxscore --force-merge load1=3.76 waited=0s ok
+2026-11-13T08:23:10Z scidocs --strategy taat load1=3.76 waited=0s ok
+2026-11-13T08:23:21Z scidocs --strategy wand load1=3.78 waited=0s ok
+2026-11-13T08:24:05Z scidocs --strategy maxscore load1=3.47 waited=30s ok
+2026-11-13T08:24:15Z scidocs --strategy taat --force-merge load1=3.17 waited=0s ok
+2026-11-13T08:24:26Z scidocs --strategy wand --force-merge load1=2.99 waited=0s ok
+2026-11-13T08:24:38Z scidocs --strategy maxscore --force-merge load1=2.99 waited=0s ok
+2026-11-13T08:25:10Z trec-covid --strategy taat load1=2.84 waited=0s ok
+2026-11-13T08:26:36Z trec-covid --strategy wand load1=2.92 waited=30s ok
+2026-11-13T08:27:28Z trec-covid --strategy maxscore load1=2.44 waited=0s ok
+2026-11-13T08:28:19Z trec-covid --strategy taat --force-merge load1=2.58 waited=0s ok
+2026-11-13T08:29:12Z trec-covid --strategy wand --force-merge load1=2.74 waited=0s ok
+2026-11-13T08:30:05Z trec-covid --strategy maxscore --force-merge load1=2.40 waited=0s ok
+2026-11-13T08:30:58Z trec-covid --strategy taat --bucket-field --filter bucket:[0 TO 0] load1=2.69 waited=0s ok
+2026-11-13T08:31:48Z trec-covid --strategy wand --bucket-field --filter bucket:[0 TO 0] load1=2.33 waited=0s ok
+2026-11-13T08:32:40Z trec-covid --strategy maxscore --bucket-field --filter bucket:[0 TO 0] load1=2.58 waited=0s ok
+2026-11-13T08:33:31Z trec-covid --strategy taat --bucket-field --filter bucket:[0 TO 9] load1=2.53 waited=0s ok
+2026-11-13T08:34:22Z trec-covid --strategy wand --bucket-field --filter bucket:[0 TO 9] load1=2.67 waited=0s ok
+2026-11-13T08:35:13Z trec-covid --strategy maxscore --bucket-field --filter bucket:[0 TO 9] load1=2.63 waited=0s ok
+2026-11-13T08:36:03Z trec-covid --strategy taat --bucket-field --filter bucket:[0 TO 49] load1=2.10 waited=0s ok
+2026-11-13T08:36:53Z trec-covid --strategy wand --bucket-field --filter bucket:[0 TO 49] load1=2.68 waited=0s ok
+2026-11-13T08:37:43Z trec-covid --strategy maxscore --bucket-field --filter bucket:[0 TO 49] load1=2.25 waited=0s ok
+2026-11-13T08:38:33Z trec-covid qbench load1=2.67 waited=0s ok
+2026-11-13T08:38:35Z fiqa --strategy taat --bucket-field --filter bucket:[0 TO 0] load1=2.67 waited=0s ok
+2026-11-13T08:38:48Z fiqa --strategy wand --bucket-field --filter bucket:[0 TO 0] load1=2.49 waited=0s ok
+2026-11-13T08:39:04Z fiqa --strategy maxscore --bucket-field --filter bucket:[0 TO 0] load1=2.42 waited=0s ok
+2026-11-13T08:39:20Z fiqa --strategy taat --bucket-field --filter bucket:[0 TO 9] load1=2.25 waited=0s ok
+2026-11-13T08:39:34Z fiqa --strategy wand --bucket-field --filter bucket:[0 TO 9] load1=2.58 waited=0s ok
+2026-11-13T08:39:50Z fiqa --strategy maxscore --bucket-field --filter bucket:[0 TO 9] load1=2.65 waited=0s ok
+2026-11-13T08:40:08Z fiqa --strategy taat --bucket-field --filter bucket:[0 TO 49] load1=2.51 waited=0s ok
+2026-11-13T08:40:22Z fiqa --strategy wand --bucket-field --filter bucket:[0 TO 49] load1=2.47 waited=0s ok
+2026-11-13T08:40:39Z fiqa --strategy maxscore --bucket-field --filter bucket:[0 TO 49] load1=2.59 waited=0s ok
+2026-11-13T08:40:56Z fiqa qbench load1=2.69 waited=0s ok
