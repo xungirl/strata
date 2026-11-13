@@ -4,7 +4,7 @@
 
 strata is inspired by Lucene/Tantivy (segment architecture, inverted index, block-max WAND) and Qdrant (HNSW), but the engine is our own code: Tantivy shows up only as a comparison baseline in a separate bench crate. The project is built **incrementally over 10 stages**. Every number in this README was measured on one machine; see [BENCHMARK.md](BENCHMARK.md).
 
-> Status: stages 1-3 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. There are no vectors yet; they come in stage 4.
+> Status: stages 1-4 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid fusion comes in stage 5.
 
 ---
 
@@ -113,6 +113,33 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 3. *Proptest found a single-block cursor bug* (stage 2 format change): `advance_to` past the last doc of a single-block term.
 4. *A field-kind conflict could only be detected at flush time*, after the write was already acknowledged. Moved the check before the WAL append.
 
+### Stage 4: Vector index (done)
+
+**Goal.** Dense retrieval with our own approximate-nearest-neighbour index, measured as recall@10 vs latency against exact search and against hnswlib.
+
+**Decisions and alternatives considered.**
+
+| decision | chosen | alternatives | why |
+|---|---|---|---|
+| embedding model | `BAAI/bge-small-en-v1.5` (384-d), computed once locally on the M2 GPU (MPS), cached in `data/embeddings` with model revision and versions | larger models; API embeddings | 37.7 min for all five corpora on this laptop (measured); small enough to iterate |
+| similarity | dot product of L2-normalized vectors (= cosine) | L2 distance | one kernel, no square roots |
+| ANN index | own HNSW (heuristic neighbour selection, M0 = 2M, mL = 1/ln M), single-threaded deterministic build | IVF, DiskANN/Vamana, hnswlib bindings | the most widely deployed graph index (Qdrant, Lucene, pgvector); deterministic builds make tests exact |
+| SIMD | hand NEON for f32 (4 FMA accumulators); plain loop for int8 (LLVM emits SDOT) | `std::simd` (nightly), hand NEON everywhere | measured: hand f32 NEON 3.2x scalar; hand int8 NEON 2.1x *slower* than the compiler's SDOT |
+| quantization | global int8 scalar quantization, graph traversal on codes, f32 rescoring of the ef candidates | per-dimension scales; product quantization | 4x smaller codes, 1.27-3.6x faster search, recall within 0.004 from ef=40; PQ not implemented |
+| filtered ANN | filter during traversal (blocked nodes still route), exact scan of the allowed set below a size threshold | pre-filtering only; post-filtering | measured: graph search degrades badly at 1% selectivity while a scan of ~1% of docs is cheap |
+
+**Built.** New crate `strata-vector`: `distance` (scalar + NEON, the only `unsafe` code, documented and proptested), `vectors`, `quant` (SQ8), `flat` (exact top-k), `hnsw` (build, search, SQ8 search with rescoring, filtered search with brute-force fallback, save/load), `embeddings`; `strata-vbench`; `scripts/embed_beir.py`; `scripts/hnswlib_baseline.py`; `scripts/crosscheck_exact_knn.py`.
+
+**Verified.** NEON kernels vs scalar (proptest: f32 within 1e-4, int8 exact). HNSW: recall > 0.97 on random data, determinism, save/load round trip, filtered results only contain allowed ids, brute-force fallback is exact, SQ8 recall > 0.95. Our exact dense top-10 matches numpy on 300/300, 648/648 and 1000/1000 queries (scifact, fiqa, scidocs). The 6 set differences on nfcorpus/trec-covid are all ties at rank 10. Recall vs hnswlib is within 0.0125 at every ef.
+
+**Measured.** trec-covid (171k docs): exact search p50 5.9 ms; HNSW ef=160 recall@10 1.0000 at 515 µs (11.5x); SQ8 202 µs (29x). Build 90 s single-threaded. Dense nDCG@10 beats BM25 on all five datasets (e.g. trec-covid 0.7578 vs 0.5943). Filtered ANN at 1% selectivity: the graph takes 7-44 ms versus 0.26 ms for an exact scan of the allowed docs, so a fallback is essential.
+
+**Problems hit and fixes.**
+1. *Hand-written int8 NEON was slower than a plain loop.* The assembly showed LLVM compiles the scalar loop to `SDOT` (the dotprod extension is enabled by default on `aarch64-apple-darwin`, while the `vdotq_s32` intrinsic is still unstable). `dot_i8` now uses the loop; the hand kernel is kept and benchmarked for comparison.
+2. *hnswlib looked surprisingly slow.* Reading its source: hnswlib 0.8.0 only has x86 SIMD kernels, so on ARM it runs generic loops. Documented rather than claimed as a win.
+3. *Tie-induced "mismatches" against numpy* (nfcorpus has duplicate documents). Checked: every set mismatch is a tie at rank 10.
+4. *Benchmark hygiene:* embeddings ran on the GPU while CPU benchmarks were held back; all stage-4 timing steps started below load 4.
+
 ### Key metrics
 
 | metric | value | how measured | source file |
@@ -133,11 +160,15 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 | Exact dynamic pruning | BMW and MaxScore run files byte-identical to exhaustive on 5/5 datasets × {multi, 1 segment} (20/20) and filtered (12/12) | proptest + `compare_runs.py` + `cmp` | `results/stage3/parity/` |
 | MaxScore vs exhaustive, k=10 p50 | trec-covid 809 vs 1,383 µs (1.71x), fiqa 1.23x, scidocs 1.09x; slower on scifact/nfcorpus | `run_stage3.sh`, 3 builds | `results/stage3/tables.md` |
 | Block-max WAND, k=10 p50 | 0.47-0.71x of TAAT in all configurations (slower); scores 0.8% of trec-covid query postings | same | `results/stage3/tables.md`, `wand_debug_trec-covid_k10.txt` |
+| HNSW recall vs latency | trec-covid ef=160: recall@10 1.0000, p50 515 µs vs 5,908 µs exact (11.5x); SQ8 202 µs (29x) | `strata-vbench`, 3 passes | `results/stage4/tables.md` |
+| HNSW vs hnswlib 0.8.0 (same M/efC, 1 thread, ARM) | recall within 0.0125; p50 1.4-6.1x lower; build 2.0-5.0x faster (hnswlib has no ARM SIMD) | `hnswlib_baseline.py` | `results/stage4/hnswlib/`, `reference/hnswlib_simd_macros.txt` |
+| SIMD kernels (384-d dot) | f32 NEON 29.5 ns vs scalar 93.8 ns; int8 auto-vectorized SDOT 8.3 ns vs hand NEON 18.0 ns | microbenchmark, 2M dots | `results/stage4/*.json` |
+| Dense retrieval (bge-small, exact) nDCG@10 | scifact 0.7127, nfcorpus 0.3430, fiqa 0.4035, scidocs 0.2052, trec-covid 0.7578 | `strata-vbench` + `metrics.rs` | `results/stage4/*.json` |
 | Structured queries (k=10 p50) | phrase 157-207 µs, boolean 258-283 µs, prefix 79-804 µs (p99 up to 18.6 ms) | `strata-qbench` | `results/stage3/qbench/` |
 | Tests | 48 tests (unit + proptest vs brute force), 10/10 consecutive passes | `cargo test --workspace` ×10 | `results/test_10x.txt` |
 
 ### Next steps
-Stage 4: vectors. Compute BEIR embeddings locally once (bge-small-en-v1.5), then build our own HNSW with NEON SIMD distances and int8 scalar quantization, plus filtered ANN. Measure recall@10 vs latency curves against brute force and an hnswlib baseline.
+Stage 5: hybrid retrieval. Fuse the BM25 and dense runs (RRF, normalized weighted fusion), add an optional local cross-encoder re-ranker, and compare lexical, dense, hybrid and re-ranked nDCG@10 with paired significance tests.
 
 ## Architecture
 
@@ -208,6 +239,9 @@ scripts/run_stage2.sh                    # every stage-2 number
 target/release/strata-eval run --dataset trec-covid --engine disk --strategy maxscore   # stage 3 pruning
 target/release/strata-qbench --index data/indexes/<dir> --queries data/fiqa/queries.jsonl
 scripts/run_stage3.sh                    # every stage-3 number
+uv run --with sentence-transformers==3.3.1 --with torch python -I scripts/embed_beir.py   # embeddings (once)
+target/release/strata-vbench --dataset fiqa --out results/stage4/fiqa.json
+scripts/run_stage4.sh                    # every stage-4 number
 
 scripts/run_all.sh                       # everything in BENCHMARK.md (9.5 min on this M2)
 python3 -I scripts/make_tables.py        # regenerate the tables from results/*.json
@@ -239,6 +273,7 @@ println!("{} {}", segment.external_id(hits[0].doc), hits[0].score);
 - **Unexplained residual gap to Anserini** on nfcorpus (−0.0013 nDCG@10) and trec-covid (−0.0012). Total token counts differ by 0.07% / 0.01%. Our *guess* is tokenizer edge cases (Lucene's StandardTokenizer emits tokens for emoji-class symbols like ©/®, and the two may use different Unicode versions). I couldn't run Lucene here to diff tokens, so this is unverified.
 - **Latency numbers are single-machine, single-thread, in-process** (no network, no serialization), on a laptop with heterogeneous cores and background processes. trec-covid has only 50 queries, so its "p99" is simply its maximum.
 - **The Tantivy comparison is not a claim that strata is faster.** Tantivy's index is compressed (4.5–5.1× smaller), it does far more, and we did not profile it. strata's exhaustive scan over raw `u32` postings is cheap on these small corpora. The gap may well reverse at scale or once stage 2 adds compression.
+- Vectors: single-threaded HNSW build; no PQ; filtered ANN switches strategies by a fixed threshold; the vector index is separate from the lexical segments (no shared WAL yet).
 - MS MARCO and other large BEIR sets were deliberately not run (disk budget).
 
 ## Roadmap
@@ -248,7 +283,7 @@ The project is built incrementally; each stage ends with tests, measured numbers
 - [x] **1. Foundation:** analyzer, in-memory inverted index, BM25, BEIR eval + pytrec_eval cross-check, Tantivy/Anserini baselines.
 - [x] **2. Storage engine:** immutable mmap segments (delta + varint/bitpacked postings, FST term dict), WAL + crash recovery (kill -9 chaos test), background tiered merge, snapshot-isolated readers, deletes via tombstones.
 - [x] **3. Query engine:** WAND / block-max WAND, boolean/phrase/prefix queries, metadata filters, query parser; latency vs exhaustive.
-- [ ] **4. Vector index:** own HNSW, SIMD distance, int8 scalar quantization (+ optional product quantization), filtered ANN; recall@10 vs latency curves vs brute force.
+- [x] **4. Vector index:** own HNSW, SIMD distance, int8 scalar quantization (+ optional product quantization), filtered ANN; recall@10 vs latency curves vs brute force.
 - [ ] **5. Hybrid retrieval:** RRF + weighted/normalized fusion, optional cross-encoder rerank; BEIR nDCG lexical vs dense vs hybrid.
 - [ ] **6. Single-node service:** axum HTTP + gRPC (tonic) API, bulk ingest, Prometheus metrics, OpenTelemetry tracing, own load tester.
 - [ ] **7. Distributed:** sharding (hash by doc id), coordinator scatter-gather top-k merge with global IDF, partial-result timeouts / hedged requests.
@@ -258,10 +293,10 @@ The project is built incrementally; each stage ends with tests, measured numbers
 
 ## What the next stage should watch out for
 
-- Vectors are a separate structure from segments: decide how they get ids (external ids, so lexical and dense results can be fused) and how deletes/upserts reach the graph (HNSW cannot really delete; hide nodes).
-- Recall must be measured against an *exact* ground truth computed with the same similarity and the same normalization. Cross-check that ground truth independently (numpy).
-- Embedding computation is the most expensive step and runs on this laptop: do it once, cache it under `data/` (gitignored), and record the model, revision and versions.
-- Keep the load-average discipline. GPU/MPS work and compiles distort timings.
+- Fusion has knobs (RRF k, weight alpha). Tuning them on the test queries would inflate results. Fix them a priori (k=60, alpha=0.5) and report any sweep separately as an oracle analysis.
+- The two runs have different depths and score scales. Normalize per query, and decide what a document missing from one run scores.
+- Report significance with paired tests over queries. Cross-check the t-test against SciPy.
+- The cross-encoder re-ranker is slow. Re-rank a fixed depth (top 100) and record its time and device.
 
 ## License
 

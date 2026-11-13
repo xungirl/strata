@@ -17,3 +17,9 @@
 - Headline: block-max WAND and MaxScore are exact: run files byte-identical to exhaustive on 5/5 datasets × {multi, 1 segment} (20/20) and filtered (12/12) (`results/stage3/parity/`); proptest + mutation check.
 - Headline: MaxScore k=10 p50 vs exhaustive TAAT: trec-covid 1.71x (809 vs 1,383 µs), fiqa 1.23x, scidocs 1.09x (`results/stage3/tables.md`).
 - Caveats: BMW slower than TAAT in every k=10 config (0.47-0.71x); pruning slower than TAAT on tiny corpora, at k=1000 on fiqa/trec-covid, and with 1% filters; flat query language only.
+
+## Stage 4: Vector index (tag `stage-4`)
+- Tests: 87 tests, 10/10 consecutive green runs (`results/stage4/test_10x.txt`); clippy -D warnings + fmt clean.
+- Headline: own HNSW on trec-covid (171k bge-small vectors): ef=160 recall@10 1.0000 at p50 515 µs vs 5,908 µs exact (11.5x); SQ8+rescore 202 µs (29x) (`results/stage4/tables.md`).
+- Headline: recall within 0.0125 of hnswlib 0.8.0 at every ef; exact top-10 cross-checked against numpy (`results/stage4/crosscheck_exact_knn.txt`); f32 NEON 3.2x scalar, int8 auto-vectorized SDOT 2.1x faster than hand NEON.
+- Caveats: hnswlib has no ARM SIMD (comparison flattering on this machine); single-threaded build; filtered ANN at 1% needs the brute-force fallback; no PQ.
