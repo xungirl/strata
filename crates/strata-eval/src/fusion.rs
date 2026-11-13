@@ -63,7 +63,12 @@ fn normalize(list: &[(String, f64)], norm: Norm) -> HashMap<&str, f64> {
         Norm::MinMax => {
             let min = scores.iter().copied().fold(f64::INFINITY, f64::min);
             let max = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            (min, if max > min { max - min } else { 1.0 })
+            if max <= min {
+                // Degenerate list (one hit, or all scores equal): every
+                // retrieved doc is the best this retriever has to offer.
+                return list.iter().map(|(d, _)| (d.as_str(), 1.0)).collect();
+            }
+            (min, max - min)
         }
         Norm::ZScore => {
             let n = scores.len() as f64;
@@ -87,10 +92,14 @@ pub fn weighted(lexical: &Run, dense: &Run, alpha: f64, norm: Norm, depth: usize
     for qid in qids {
         let l = normalize(lexical.get(qid).unwrap_or(&empty), norm);
         let d = normalize(dense.get(qid).unwrap_or(&empty), norm);
-        // A doc missing from a run gets that run's minimum normalized score
-        // (0 for min-max), i.e. "no evidence from this retriever".
-        let l_floor = l.values().copied().fold(f64::INFINITY, f64::min);
-        let d_floor = d.values().copied().fold(f64::INFINITY, f64::min);
+        // A doc missing from a run gets just *below* that run's minimum
+        // normalized score (about 0 for min-max): "no evidence from this
+        // retriever". Strictly below, so that alpha = 1 (or 0) reproduces
+        // the lexical (or dense) ranking exactly instead of tying the
+        // weakest retrieved doc with every non-retrieved one.
+        const BELOW: f64 = 1e-9;
+        let l_floor = l.values().copied().fold(f64::INFINITY, f64::min) - BELOW;
+        let d_floor = d.values().copied().fold(f64::INFINITY, f64::min) - BELOW;
         let mut acc: HashMap<&str, f64> = HashMap::new();
         for doc in l.keys().chain(d.keys()) {
             let ls = l
@@ -141,11 +150,28 @@ mod tests {
         let dense = run(&[("b", 0.9), ("c", 0.5)]); // -> b 1.0, c 0.0
         let f = weighted(&lex, &dense, 0.5, Norm::MinMax, 10);
         let s: HashMap<&str, f64> = f["q"].iter().map(|(d, s)| (d.as_str(), *s)).collect();
-        assert!((s["a"] - 0.5).abs() < 1e-12); // 0.5*1 + 0.5*0 (missing -> min 0)
-        assert!((s["b"] - 0.5).abs() < 1e-12); // 0.5*0 + 0.5*1
-        assert!((s["c"] - 0.0).abs() < 1e-12);
+        assert!((s["a"] - 0.5).abs() < 1e-8); // 0.5*1 + 0.5*~0 (missing -> just below min 0)
+        assert!((s["b"] - 0.5).abs() < 1e-8); // 0.5*0 + 0.5*1
+        assert!(s["c"].abs() < 1e-8);
         // alpha = 1 reproduces the lexical ranking.
         let only_lex = weighted(&lex, &dense, 1.0, Norm::MinMax, 10);
         assert_eq!(only_lex["q"][0].0, "a");
+    }
+
+    #[test]
+    fn extreme_alphas_reproduce_input_rankings() {
+        let lex = run(&[("a", 3.0), ("b", 2.0), ("c", 1.0)]);
+        let dense = run(&[("x", 0.9), ("c", 0.8), ("y", 0.7), ("a", 0.1)]);
+        let ids = |r: &Run| -> Vec<String> { r["q"].iter().map(|(d, _)| d.clone()).collect() };
+        for norm in [Norm::MinMax, Norm::ZScore] {
+            let l = weighted(&lex, &dense, 1.0, norm, 3);
+            assert_eq!(ids(&l), vec!["a", "b", "c"], "{norm:?}");
+            let d = weighted(&lex, &dense, 0.0, norm, 4);
+            assert_eq!(ids(&d), vec!["x", "c", "y", "a"], "{norm:?}");
+        }
+        // Degenerate one-hit lexical list stays on top at alpha = 1.
+        let one = run(&[("z", 5.0)]);
+        let r = weighted(&one, &dense, 1.0, Norm::MinMax, 2);
+        assert_eq!(r["q"][0].0, "z");
     }
 }

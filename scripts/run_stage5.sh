@@ -21,8 +21,9 @@ for d in "${DATASETS[@]}"; do
   echo "=================== $d"
   $EVAL hybrid --dataset "$d" --lexical "results/runs/$d/$LEX.trec" \
     --dense "results/stage4/runs/$d/dense-exact.bge-small.trec" --out-dir $S | tee "$S/logs/$d.hybrid.log"
-  # Cross-encoder re-ranking of the RRF top 100 (local, MPS/CPU).
-  uv run -q --with sentence-transformers==3.3.1 --with torch python -I scripts/rerank_cross_encoder.py \
+  # Cross-encoder re-ranking of the RRF top 100 (local, MPS/CPU). Cached:
+  # it depends only on the RRF run, so delete the .meta.json to redo it.
+  [ -f "$S/runs/$d/rrf-k60.rerank-minilm.trec.meta.json" ] || uv run -q --with sentence-transformers==3.3.1 --with torch python -I scripts/rerank_cross_encoder.py \
     --dataset "$d" --run "$S/runs/$d/rrf-k60.trec" --depth 100 --out "$S/runs/$d/rrf-k60.rerank-minilm.trec" \
     2> "$S/logs/$d.rerank.err" | tee "$S/logs/$d.rerank.log"
   cp "$S/runs/$d/rrf-k60.rerank-minilm.trec.meta.json" "$S/logs/$d.rerank.meta.json"
