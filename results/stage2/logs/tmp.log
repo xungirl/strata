@@ -1,0 +1,5 @@
+[scidocs] loaded 25657 docs, 1000 queries in 0.19s
+[scidocs] repeat 1: index 2.146s (11953 docs/s, analysis-only 0.887s), queries p50 354us p99 641us, k=10 p50 141us p99 378us
+[scidocs] repeat 2: index 1.885s (13611 docs/s, analysis-only 0.893s), queries p50 367us p99 687us, k=10 p50 141us p99 412us
+[scidocs] repeat 3: index 1.883s (13626 docs/s, analysis-only 0.907s), queries p50 360us p99 671us, k=10 p50 136us p99 395us
+wrote results/stage2/scidocs/strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop.json and results/stage2/runs/scidocs/strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop.trec

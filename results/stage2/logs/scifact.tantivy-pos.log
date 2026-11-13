@@ -1,0 +1,6 @@
+[scifact] tantivy repeat 1: index 0.363s + merge 0.000s (1 segs, 14260 docs/s), 2223559 bytes, p50 321us p99 932us
+[scifact]   k=10 p50 101us p99 660us
+[scifact] tantivy repeat 2: index 0.352s + merge 0.000s (1 segs, 14726 docs/s), 2223559 bytes, p50 274us p99 1260us
+[scifact]   k=10 p50 77us p99 336us
+[scifact] tantivy repeat 3: index 0.311s + merge 0.000s (1 segs, 16641 docs/s), 2223559 bytes, p50 259us p99 676us
+[scifact]   k=10 p50 74us p99 302us

@@ -1,0 +1,6 @@
+[trec-covid] tantivy repeat 1: index 9.213s + merge 0.000s (1 segs, 18597 docs/s), 48580657 bytes, p50 3946us p99 17881us
+[trec-covid]   k=10 p50 1447us p99 8404us
+[trec-covid] tantivy repeat 2: index 9.927s + merge 0.000s (1 segs, 17258 docs/s), 48580657 bytes, p50 2838us p99 12481us
+[trec-covid]   k=10 p50 1047us p99 6912us
+[trec-covid] tantivy repeat 3: index 8.355s + merge 0.000s (1 segs, 20507 docs/s), 48580657 bytes, p50 2887us p99 12271us
+[trec-covid]   k=10 p50 1036us p99 7252us

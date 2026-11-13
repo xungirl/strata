@@ -1,0 +1,25 @@
+dataset	tag	metrics+timings
+scifact	strata-mem-session2.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.6777	R@100=0.9253	R@1000=0.9767	MRR@10=0.6445	docs/s=14483±3938	p50=155us	p99=589us	k10_p50=31us	k10_p99=82us
+scifact	strata-disk.f10000.m4.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.6777	R@100=0.9253	R@1000=0.9767	MRR@10=0.6445	docs/s=12182±64	p50=205us	p99=298us	k10_p50=44us	k10_p99=105us
+scifact	strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.6777	R@100=0.9253	R@1000=0.9767	MRR@10=0.6445	docs/s=12070±386	p50=208us	p99=299us	k10_p50=44us	k10_p99=101us
+scifact	tantivy-0.27.0.strata-analyzer.pos	nDCG@10=0.6826	R@100=0.9282	R@1000=0.9767	MRR@10=0.6464	docs/s=15209±1262	p50=285us	p99=956us	k10_p50=84us	k10_p99=433us
+nfcorpus	strata-mem-session2.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.3202	R@100=0.2456	R@1000=0.3702	MRR@10=0.5215	docs/s=15538±911	p50=16us	p99=145us	k10_p50=4us	k10_p99=28us
+nfcorpus	strata-disk.f10000.m4.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.3202	R@100=0.2456	R@1000=0.3702	MRR@10=0.5215	docs/s=10635±748	p50=24us	p99=196us	k10_p50=6us	k10_p99=40us
+nfcorpus	strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.3202	R@100=0.2456	R@1000=0.3702	MRR@10=0.5215	docs/s=10991±241	p50=24us	p99=192us	k10_p50=6us	k10_p99=41us
+nfcorpus	tantivy-0.27.0.strata-analyzer.pos	nDCG@10=0.3207	R@100=0.2462	R@1000=0.3717	MRR@10=0.5189	docs/s=14245±283	p50=20us	p99=223us	k10_p50=9us	k10_p99=68us
+trec-covid	strata-mem-session2.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.5943	R@100=0.1090	R@1000=0.3959	MRR@10=0.8562	docs/s=21444±538	p50=1071us	p99=1947us	k10_p50=732us	k10_p99=1497us
+trec-covid	strata-disk.f10000.m4.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.5943	R@100=0.1090	R@1000=0.3959	MRR@10=0.8562	docs/s=14490±208	p50=1998us	p99=3871us	k10_p50=1337us	k10_p99=3023us
+trec-covid	strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.5943	R@100=0.1090	R@1000=0.3959	MRR@10=0.8562	docs/s=13593±1022	p50=1776us	p99=3607us	k10_p50=1338us	k10_p99=3311us
+trec-covid	tantivy-0.27.0.strata-analyzer.pos	nDCG@10=0.6146	R@100=0.1119	R@1000=0.4074	MRR@10=0.8840	docs/s=18788±1633	p50=3224us	p99=14211us	k10_p50=1177us	k10_p99=7523us
+scifact	strata-disk.batch1	nDCG@10=0.6777	R@100=0.8030	R@1000=0.8030	MRR@10=0.6445	docs/s=224±9	p50=53us	p99=125us	k10_p50=46us	k10_p99=109us
+scifact	strata-disk.batch10	nDCG@10=0.6777	R@100=0.8030	R@1000=0.8030	MRR@10=0.6445	docs/s=1726±98	p50=46us	p99=106us	k10_p50=44us	k10_p99=103us
+scifact	strata-disk.batch100	nDCG@10=0.6777	R@100=0.8030	R@1000=0.8030	MRR@10=0.6445	docs/s=8276±277	p50=45us	p99=105us	k10_p50=43us	k10_p99=104us
+scifact	strata-disk.batch1000	nDCG@10=0.6777	R@100=0.8030	R@1000=0.8030	MRR@10=0.6445	docs/s=12224±109	p50=44us	p99=100us	k10_p50=42us	k10_p99=101us
+fiqa	strata-mem-session2.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.2353	R@100=0.5400	R@1000=0.7403	MRR@10=0.2958	docs/s=31872±1719	p50=473us	p99=1006us	k10_p50=252us	k10_p99=799us
+fiqa	strata-disk.f10000.m4.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.2353	R@100=0.5400	R@1000=0.7403	MRR@10=0.2958	docs/s=22164±427	p50=920us	p99=1584us	k10_p50=403us	k10_p99=1005us
+fiqa	strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.2353	R@100=0.5400	R@1000=0.7403	MRR@10=0.2958	docs/s=18848±2531	p50=712us	p99=1810us	k10_p50=433us	k10_p99=1319us
+fiqa	tantivy-0.27.0.strata-analyzer.pos	nDCG@10=0.2537	R@100=0.5489	R@1000=0.7591	MRR@10=0.3089	docs/s=29950±262	p50=1205us	p99=3737us	k10_p50=467us	k10_p99=2232us
+scidocs	strata-mem-session2.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.1498	R@100=0.3473	R@1000=0.5638	MRR@10=0.2604	docs/s=20943±391	p50=259us	p99=697us	k10_p50=80us	k10_p99=230us
+scidocs	strata-disk.f10000.m4.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.1498	R@100=0.3473	R@1000=0.5638	MRR@10=0.2604	docs/s=15250±244	p50=611us	p99=1007us	k10_p50=146us	k10_p99=424us
+scidocs	strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.1498	R@100=0.3473	R@1000=0.5638	MRR@10=0.2604	docs/s=13064±962	p50=360us	p99=666us	k10_p50=139us	k10_p99=395us
+scidocs	tantivy-0.27.0.strata-analyzer.pos	nDCG@10=0.1545	R@100=0.3601	R@1000=0.5699	MRR@10=0.2672	docs/s=18262±1994	p50=577us	p99=1485us	k10_p50=167us	k10_p99=657us

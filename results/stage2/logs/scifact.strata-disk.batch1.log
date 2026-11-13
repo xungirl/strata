@@ -1,0 +1,7 @@
+# uptime:  0:07  up 65 days, 7 mins, 3 users, load averages: 3.03 4.00 5.89
+[scifact] loaded 5183 docs, 300 queries in 0.02s
+[scifact] repeat 1: index 22.381s (232 docs/s, analysis-only 0.225s), queries p50 70us p99 163us, k=10 p50 52us p99 117us
+[scifact] repeat 2: index 23.011s (225 docs/s, analysis-only 0.220s), queries p50 45us p99 100us, k=10 p50 42us p99 102us
+[scifact] repeat 3: index 24.138s (215 docs/s, analysis-only 0.223s), queries p50 45us p99 111us, k=10 p50 45us p99 108us
+wrote results/stage2/scifact/strata-disk.batch1.json and results/stage2/runs/scifact/strata-disk.batch1.trec
+scifact	strata-disk.batch1	nDCG@10=0.6777	R@100=0.8030	R@1000=0.8030	MRR@10=0.6445	docs/s=224±9	p50=53us	p99=125us	k10_p50=46us	k10_p99=109us

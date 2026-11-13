@@ -1,0 +1,6 @@
+[nfcorpus] tantivy repeat 1: index 0.250s + merge 0.000s (1 segs, 14553 docs/s), 1693551 bytes, p50 20us p99 219us
+[nfcorpus]   k=10 p50 9us p99 69us
+[nfcorpus] tantivy repeat 2: index 0.260s + merge 0.000s (1 segs, 13995 docs/s), 1693551 bytes, p50 19us p99 226us
+[nfcorpus]   k=10 p50 8us p99 67us
+[nfcorpus] tantivy repeat 3: index 0.256s + merge 0.000s (1 segs, 14187 docs/s), 1693551 bytes, p50 21us p99 224us
+[nfcorpus]   k=10 p50 9us p99 67us

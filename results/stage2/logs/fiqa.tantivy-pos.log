@@ -1,0 +1,6 @@
+[fiqa] tantivy repeat 1: index 1.944s + merge 0.000s (1 segs, 29648 docs/s), 13368742 bytes, p50 1191us p99 3575us
+[fiqa]   k=10 p50 468us p99 2259us
+[fiqa] tantivy repeat 2: index 1.913s + merge 0.000s (1 segs, 30127 docs/s), 13368742 bytes, p50 1203us p99 3797us
+[fiqa]   k=10 p50 472us p99 2207us
+[fiqa] tantivy repeat 3: index 1.917s + merge 0.000s (1 segs, 30074 docs/s), 13368742 bytes, p50 1220us p99 3839us
+[fiqa]   k=10 p50 461us p99 2231us

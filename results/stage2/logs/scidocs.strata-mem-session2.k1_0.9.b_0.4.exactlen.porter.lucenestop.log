@@ -1,0 +1,7 @@
+# uptime:  0:12  up 65 days, 12 mins, 3 users, load averages: 3.14 3.60 5.18
+[scidocs] loaded 25657 docs, 1000 queries in 0.20s
+[scidocs] repeat 1: index 1.236s (20765 docs/s, analysis-only 0.905s), queries p50 259us p99 467us, k=10 p50 79us p99 228us
+[scidocs] repeat 2: index 1.199s (21392 docs/s, analysis-only 0.913s), queries p50 261us p99 500us, k=10 p50 81us p99 236us
+[scidocs] repeat 3: index 1.241s (20672 docs/s, analysis-only 0.896s), queries p50 257us p99 1123us, k=10 p50 80us p99 225us
+wrote results/stage2/scidocs/strata-mem-session2.k1_0.9.b_0.4.exactlen.porter.lucenestop.json and results/stage2/runs/scidocs/strata-mem-session2.k1_0.9.b_0.4.exactlen.porter.lucenestop.trec
+scidocs	strata-mem-session2.k1_0.9.b_0.4.exactlen.porter.lucenestop	nDCG@10=0.1498	R@100=0.3473	R@1000=0.5638	MRR@10=0.2604	docs/s=20943±391	p50=259us	p99=697us	k10_p50=80us	k10_p99=230us

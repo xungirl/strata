@@ -1,0 +1,2 @@
+iterations=30 acked_adds=7961 acked_deletes=186 LOST=147 RESURRECTED=0 torn_tails=0 live_docs=7630 (expected live >= 7777) recovery p50=11.9ms max=25.4ms
+negative control exit code: 1 (non-zero expected: violations detected)

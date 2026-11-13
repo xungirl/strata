@@ -1,0 +1,1 @@
+iterations=100 acked_adds=113480 acked_deletes=2639 LOST=0 RESURRECTED=0 torn_tails=0 live_docs=110902 (expected live >= 110887) recovery p50=23.4ms max=62.3ms

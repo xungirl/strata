@@ -1,0 +1,7 @@
+stage-1 in-memory run vs strata-disk.f10000.m4.fm.k1_0.9.b_0.4.exactlen.porter.lucenestop
+queries compared: 648 (only in A: 0, only in B: 0)
+identical top-1000 lists: 648/648 (100.0%)
+identical top-1000 sets:  648/648 (100.0%)
+mean overlap@1000: 1.0000
+max |score diff| on shared top-1000 docs: 0
+run files byte-identical (qid, docid, rank, score columns): YES

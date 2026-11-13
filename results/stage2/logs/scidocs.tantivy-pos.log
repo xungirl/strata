@@ -1,0 +1,6 @@
+[scidocs] tantivy repeat 1: index 1.349s + merge 0.000s (1 segs, 19013 docs/s), 8200781 bytes, p50 568us p99 1448us
+[scidocs]   k=10 p50 158us p99 619us
+[scidocs] tantivy repeat 2: index 1.298s + merge 0.000s (1 segs, 19772 docs/s), 8200781 bytes, p50 570us p99 1472us
+[scidocs]   k=10 p50 175us p99 706us
+[scidocs] tantivy repeat 3: index 1.603s + merge 0.000s (1 segs, 16002 docs/s), 8200781 bytes, p50 593us p99 1534us
+[scidocs]   k=10 p50 167us p99 645us
