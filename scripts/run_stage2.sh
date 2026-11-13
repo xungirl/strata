@@ -61,6 +61,8 @@ for d in "${DATASETS[@]}"; do
   target/release/strata-bench tantivy --dataset "$d" --positions --repeats 3 --results-dir $S 2> "$S/logs/$d.tantivy-pos.log" | tee -a $S/summary.tsv
 done
 
+if [ "${SKIP_EXTRA:-0}" = 1 ]; then exit 0; fi  # re-running datasets only
+
 # WAL group-commit: ingest cost vs batch size (= docs per fsync), scifact.
 for b in 1 10 100 1000; do
   run_eval scifact --engine disk --batch $b --hits 10 --tag "strata-disk.batch$b"
