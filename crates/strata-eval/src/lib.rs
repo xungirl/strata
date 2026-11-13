@@ -9,5 +9,7 @@
 //! are judged by identical code.
 
 pub mod beir;
+pub mod fusion;
 pub mod harness;
 pub mod metrics;
+pub mod stats;
