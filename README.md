@@ -4,7 +4,7 @@
 
 strata is inspired by Lucene/Tantivy (segment architecture, inverted index, block-max WAND) and Qdrant (HNSW), but the engine is our own code: Tantivy shows up only as a comparison baseline in a separate bench crate. The project is built **incrementally over 10 stages**. Every number in this README was measured on one machine; see [BENCHMARK.md](BENCHMARK.md).
 
-> Status: stages 1-2 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, and a durable storage engine: WAL, compressed mmap segments, merges, deletes and snapshot readers, all verified against the stage-1 in-memory index and a kill -9 chaos test. There's no pruning (WAND) yet and no vectors yet. Those come in stages 3 and 4.
+> Status: stages 1-3 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. There are no vectors yet; they come in stage 4.
 
 ---
 
@@ -82,6 +82,37 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 4. *The chaos harness could report false losses*: a delete killed after its fsync but before its ACK may or may not have happened. The child now announces `TRY DEL` first and such ids are excluded. A *negative control* proves the harness detects real ack-before-persist bugs.
 5. *Benchmark hygiene:* fiqa/scidocs timings first overlapped with a low-priority compile and were re-run (originals kept in `results/stage2/superseded/`). Every repeat records the 1-minute load average.
 
+### Stage 3: Query engine (done)
+
+**Goal.** Dynamic pruning that returns *exactly* the exhaustive top-k, and real queries: boolean, phrase, prefix, metadata filters, a query language. Measure latency against the exhaustive baseline.
+
+**Decisions and alternatives considered.**
+
+| decision | chosen | alternatives | why |
+|---|---|---|---|
+| pruning algorithms | block-max WAND **and** MaxScore, both exact; MaxScore is the default | WAND only; approximate pruning (score-at-a-time, early termination) | measured both. BMW lost to the TAAT baseline on these long BEIR queries; MaxScore won at k=10 on the three larger corpora |
+| exactness under f32 | same summation order as TAAT, docs visited in global doc order (ties always lose), prune only if `bound * (1 + 1e-5) <= θ` | exact rational arithmetic; ignore rounding | bit-identical results with negligible lost pruning |
+| block bounds | `score(max_tf, min_doc_len)` from the stage-2 skip table, cached per cursor; shallow lookup without decoding | per-block max score stored at index time | stats-free: stays valid across merges and global-IDF changes |
+| boolean execution | document-at-a-time `Matcher` trait objects: term, phrase (positions), prefix (FST range, constant score, 1,024-term cap) | rewrite everything into term disjunctions | DAAT handles intersection, exclusion and positions naturally |
+| phrase scoring | phrase frequency as tf, sum of term IDFs | span queries | same as Lucene's `PhraseQuery` |
+| filters | per-doc columns (`fields.json/.bin`, segment format v2), evaluated lazily per candidate | bitset per filter; filter-driven iteration | zero cost without filters; selective filters are a known weak spot (measured) |
+| query language | flat Lucene-style: `+must -not "phrase" pre* field:value field:[lo TO hi]` | full Lucene grammar with parentheses | enough for the experiments; no parentheses yet |
+
+**Built.** New crate `strata-query` (`ast`, `parser`, `filter`, `wand` = BMW + MaxScore, `exec`, `search()` dispatch). Storage: metadata fields (keyword/int) through WAL, buffer, segments, merges, with kind validation before logging; `advance_to` binary-searches the skip table; shallow `block_for()`. `strata-eval run --strategy taat|wand|maxscore --bucket-field --filter ...`. `strata-qbench` (phrase/prefix/boolean/filter latency). `wand_debug` diagnostic example.
+
+**Verified.**
+- Proptest: BMW == MaxScore == DAAT boolean executor == exhaustive TAAT, **bit-identical**, over random skewed corpora with multiple segments, merges, deletes, filters and k ∈ {1..1000}. Mutation check: an unsafe bound (×0.7) makes it fail.
+- Proptest: boolean/phrase/prefix/filter queries match a naive evaluator over raw tokens.
+- BEIR: BMW and MaxScore run files byte-identical to stage 1 on 5/5 datasets, multi- and single-segment (20/20), and with 3 filter selectivities on 2 datasets (12/12 vs filtered TAAT).
+
+**Measured.** k=10 p50, MaxScore vs exhaustive TAAT: trec-covid 1.71x faster (809 vs 1,383 µs), fiqa 1.23x, scidocs 1.09x, slower on scifact and nfcorpus. Block-max WAND was slower than TAAT in all k=10 configurations (0.47-0.71x). Filters: MaxScore is 2.3x faster than TAAT at 50% selectivity, slower at 1%. Phrase queries p50 157-207 µs.
+
+**Problems hit and fixes.**
+1. *First BMW was slower than exhaustive.* Profiling-by-counters (`wand_debug`) found three causes: cursors (with 1 KB decode buffers) were moved on every re-sort, so we now sort indexes; `advance_to` scanned the skip table linearly, so it now binary-searches; block bounds were recomputed, so they are now cached. Even then BMW did ~16k loop iterations per trec-covid query to fully score ~1.4k docs.
+2. *So we implemented MaxScore*, which suits long queries with many low-IDF terms and became the default. This is an honest negative result for BMW on these corpora, not tuned away.
+3. *Proptest found a single-block cursor bug* (stage 2 format change): `advance_to` past the last doc of a single-block term.
+4. *A field-kind conflict could only be detected at flush time*, after the write was already acknowledged. Moved the check before the WAL append.
+
 ### Key metrics
 
 | metric | value | how measured | source file |
@@ -99,12 +130,14 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 | Compressed index size | 3.7-4.8 B/posting incl. positions (trec-covid 53.8 MB); 1.02-1.24x Tantivy-with-positions | segment file sizes | `results/stage2/tables.md` |
 | WAL group commit | 224 docs/s with 1 doc per fsync vs 12,224 docs/s with 1,000 (scifact) | `--batch` sweep, 3 builds | `results/stage2/scifact/strata-disk.batch*.json` |
 | Recovery time | p50 23.4 ms, max 62.3 ms (open + WAL replay) | timed in chaos harness | `results/stage2/chaos.json` |
+| Exact dynamic pruning | BMW and MaxScore run files byte-identical to exhaustive on 5/5 datasets × {multi, 1 segment} (20/20) and filtered (12/12) | proptest + `compare_runs.py` + `cmp` | `results/stage3/parity/` |
+| MaxScore vs exhaustive, k=10 p50 | trec-covid 809 vs 1,383 µs (1.71x), fiqa 1.23x, scidocs 1.09x; slower on scifact/nfcorpus | `run_stage3.sh`, 3 builds | `results/stage3/tables.md` |
+| Block-max WAND, k=10 p50 | 0.47-0.71x of TAAT in all configurations (slower); scores 0.8% of trec-covid query postings | same | `results/stage3/tables.md`, `wand_debug_trec-covid_k10.txt` |
+| Structured queries (k=10 p50) | phrase 157-207 µs, boolean 258-283 µs, prefix 79-804 µs (p99 up to 18.6 ms) | `strata-qbench` | `results/stage3/qbench/` |
 | Tests | 48 tests (unit + proptest vs brute force), 10/10 consecutive passes | `cargo test --workspace` ×10 | `results/test_10x.txt` |
 
 ### Next steps
-Stage 3: dynamic pruning (WAND / block-max WAND) that must return exactly the exhaustive results, boolean/phrase/prefix queries on the stage-2 positions, metadata filters and a query parser.
-
----
+Stage 4: vectors. Compute BEIR embeddings locally once (bge-small-en-v1.5), then build our own HNSW with NEON SIMD distances and int8 scalar quantization, plus filtered ANN. Measure recall@10 vs latency curves against brute force and an hnswlib baseline.
 
 ## Architecture
 
@@ -172,6 +205,9 @@ target/release/strata-mem --datasets scifact nfcorpus
 target/release/strata-eval run --dataset fiqa --engine disk [--force-merge]   # stage 2 durable index
 target/release/strata-chaos run --dir data/chaos --iterations 100           # kill -9 harness
 scripts/run_stage2.sh                    # every stage-2 number
+target/release/strata-eval run --dataset trec-covid --engine disk --strategy maxscore   # stage 3 pruning
+target/release/strata-qbench --index data/indexes/<dir> --queries data/fiqa/queries.jsonl
+scripts/run_stage3.sh                    # every stage-3 number
 
 scripts/run_all.sh                       # everything in BENCHMARK.md (9.5 min on this M2)
 python3 -I scripts/make_tables.py        # regenerate the tables from results/*.json
@@ -197,8 +233,9 @@ println!("{} {}", segment.external_id(hits[0].doc), hits[0].score);
 
 - **One writer process per index directory, not enforced** (no lock file). Durability is tested against process crashes (kill -9), **not power loss or OS crashes**. No checksums on segment files (only on WAL records and tombstone files).
 - Deleted documents keep counting in N/df until merged (as in Lucene), so scores drift slightly with deletes.
-- **Exhaustive retrieval.** Query cost grows with total postings for the query terms. No WAND yet.
-- Positions are stored (stage 2) but not queried yet. No field weighting (title and body are concatenated, Anserini "flat").
+- **Pruning gains are modest on these corpora** (MaxScore 1.1-1.7x at k=10 on the three larger datasets; BMW slower than exhaustive). Selective filters (1%) make pruning slower than exhaustive; there is no filter-driven iteration.
+- Query language: flat only (no parentheses, no `AND`/`OR` keywords); prefix expansion capped at 1,024 terms; positions have no stopword gaps (differs from Lucene).
+- No field weighting (title and body are concatenated, Anserini "flat"). Keyword-field dictionaries live in JSON (fine for low cardinality only).
 - **Unexplained residual gap to Anserini** on nfcorpus (−0.0013 nDCG@10) and trec-covid (−0.0012). Total token counts differ by 0.07% / 0.01%. Our *guess* is tokenizer edge cases (Lucene's StandardTokenizer emits tokens for emoji-class symbols like ©/®, and the two may use different Unicode versions). I couldn't run Lucene here to diff tokens, so this is unverified.
 - **Latency numbers are single-machine, single-thread, in-process** (no network, no serialization), on a laptop with heterogeneous cores and background processes. trec-covid has only 50 queries, so its "p99" is simply its maximum.
 - **The Tantivy comparison is not a claim that strata is faster.** Tantivy's index is compressed (4.5–5.1× smaller), it does far more, and we did not profile it. strata's exhaustive scan over raw `u32` postings is cheap on these small corpora. The gap may well reverse at scale or once stage 2 adds compression.
@@ -210,7 +247,7 @@ The project is built incrementally; each stage ends with tests, measured numbers
 
 - [x] **1. Foundation:** analyzer, in-memory inverted index, BM25, BEIR eval + pytrec_eval cross-check, Tantivy/Anserini baselines.
 - [x] **2. Storage engine:** immutable mmap segments (delta + varint/bitpacked postings, FST term dict), WAL + crash recovery (kill -9 chaos test), background tiered merge, snapshot-isolated readers, deletes via tombstones.
-- [ ] **3. Query engine:** WAND / block-max WAND, boolean/phrase/prefix queries, metadata filters, query parser; latency vs exhaustive.
+- [x] **3. Query engine:** WAND / block-max WAND, boolean/phrase/prefix queries, metadata filters, query parser; latency vs exhaustive.
 - [ ] **4. Vector index:** own HNSW, SIMD distance, int8 scalar quantization (+ optional product quantization), filtered ANN; recall@10 vs latency curves vs brute force.
 - [ ] **5. Hybrid retrieval:** RRF + weighted/normalized fusion, optional cross-encoder rerank; BEIR nDCG lexical vs dense vs hybrid.
 - [ ] **6. Single-node service:** axum HTTP + gRPC (tonic) API, bulk ingest, Prometheus metrics, OpenTelemetry tracing, own load tester.
@@ -221,10 +258,10 @@ The project is built incrementally; each stage ends with tests, measured numbers
 
 ## What the next stage should watch out for
 
-- Pruning (WAND/MaxScore) must return **exactly** the exhaustive results. Sum contributions in the same term order as the TAAT accumulator, visit docs in global doc order so ties break identically, and keep a safety margin on f32 upper bounds. Check with a proptest and with BEIR run files.
-- The per-block `(max_tf, min_doc_len)` bounds are already in the skip table; single-block terms have no skip table, so their bound comes from the header.
-- Filters need per-document metadata: that is a segment format change (bump `FORMAT_VERSION`) and a WAL record change.
-- The disk path is 1.4-1.8x slower than in-memory at k=10. Pruning has to beat the TAAT baseline *on this machine*, not just do less work in theory.
+- Vectors are a separate structure from segments: decide how they get ids (external ids, so lexical and dense results can be fused) and how deletes/upserts reach the graph (HNSW cannot really delete; hide nodes).
+- Recall must be measured against an *exact* ground truth computed with the same similarity and the same normalization. Cross-check that ground truth independently (numpy).
+- Embedding computation is the most expensive step and runs on this laptop: do it once, cache it under `data/` (gitignored), and record the model, revision and versions.
+- Keep the load-average discipline. GPU/MPS work and compiles distort timings.
 
 ## License
 

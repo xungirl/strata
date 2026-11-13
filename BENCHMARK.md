@@ -290,3 +290,115 @@ Engine settings: flush a segment every 10,000 docs; merge 4 adjacent segments of
 - **Query latency.** The disk engine is slower than the in-memory one at k=10 by 1.4-1.8x (decode + mmap instead of reading 8-byte structs), e.g. trec-covid p50 1,338 vs 732 µs. Multiple segments cost extra at k=1000 because each segment selects its own top 1001 before the merge (scidocs p50 611 vs 360 µs). Against Tantivy (block-max WAND), strata's exhaustive TAAT has lower p50 on 4/5 datasets at k=10 and lower p99 everywhere, but higher p50 on trec-covid at k=10 (1,338 vs 1,177 µs). Same caveats as stage 1 apply: small corpora, Tantivy not profiled.
 - **Crash consistency.** Over 100 real `SIGKILL`s at random points (during WAL appends, flushes, background merges and recovery itself), 113,480 acknowledged adds and 2,639 acknowledged deletes were all intact after recovery: **0 lost, 0 resurrected**. Recovery (open + WAL replay) took p50 23.4 ms, max 62.3 ms. The negative control (acknowledge *before* writing) is detected: 147 lost acks in 30 kills. The test cannot see power loss or OS crashes (the page cache survives a process kill), disk-full, or bit rot. None of the 100 kills produced a torn WAL tail. Torn-tail handling is covered by unit tests (`wal::tests::torn_tail_is_truncated`), not by this run.
 - Tests: 67 tests, 10/10 consecutive green runs (`results/stage2/test_10x.txt`).
+
+
+---
+
+# Stage 3: query engine
+
+Measured by `scripts/run_stage3.sh` on the same machine, 2026-11-13 UTC. All 50 benchmark runs started with a 1-minute load average below 4 (`results/stage3/load.log`). Raw outputs are in `results/stage3/` (per-run JSON with per-repeat latency and WAND/MaxScore work counters, `logs/`, `parity/`, `qbench/`). Every run uses the stage-2 disk engine (flush 10k docs, merge factor 4), BM25 k1=0.9 b=0.4, single-threaded search, 3 index builds × 1 query pass each.
+
+```
+date: 2026-11-13T08:20:21Z
+git: 50a0716
+rustc: rustc 1.94.0 (4a4ef493e 2026-03-02)
+uptime:  0:20  up 65 days, 20 mins, 3 users, load averages: 2.44 3.24 4.31
+```
+
+### Exactness: pruned runs vs the stage-1 exhaustive run
+
+| dataset | BMW, multi-seg | BMW, 1 seg | MaxScore, multi-seg | MaxScore, 1 seg |
+|---|---|---|---|---|
+| scifact | identical | identical | identical | identical |
+| nfcorpus | identical | identical | identical | identical |
+| fiqa | identical | identical | identical | identical |
+| scidocs | identical | identical | identical | identical |
+| trec-covid | identical | identical | identical | identical |
+
+(identical = TREC run files byte-identical in qid, doc id, rank and score at depth 1000)
+
+### Latency, multi-segment (flush 10k, merge factor 4) (µs, mean ± std of 3 passes)
+
+| dataset | strategy | p50 k=10 | p99 k=10 | p50 k=1000 | p99 k=1000 | p50 speedup vs TAAT (k=10 / k=1000) |
+|---|---|---|---|---|---|---|
+| scifact | taat | 45 ± 1 | 105 ± 8 | 206 ± 0 | 297 ± 6 | 1.00x / 1.00x |
+| scifact | wand | 89 ± 1 | 332 ± 11 | 255 ± 7 | 638 ± 30 | 0.50x / 0.81x |
+| scifact | maxscore | 54 ± 2 | 175 ± 6 | 204 ± 5 | 481 ± 11 | 0.83x / 1.01x |
+| nfcorpus | taat | 6 ± 0 | 42 ± 2 | 25 ± 2 | 201 ± 5 | 1.00x / 1.00x |
+| nfcorpus | wand | 9 ± 0 | 86 ± 7 | 18 ± 0 | 221 ± 17 | 0.66x / 1.35x |
+| nfcorpus | maxscore | 9 ± 2 | 77 ± 22 | 18 ± 1 | 297 ± 147 | 0.64x / 1.36x |
+| fiqa | taat | 419 ± 2 | 1055 ± 9 | 945 ± 10 | 1617 ± 3 | 1.00x / 1.00x |
+| fiqa | wand | 757 ± 14 | 2739 ± 47 | 1468 ± 23 | 4126 ± 101 | 0.55x / 0.64x |
+| fiqa | maxscore | 341 ± 2 | 1181 ± 32 | 1012 ± 20 | 2492 ± 54 | 1.23x / 0.93x |
+| scidocs | taat | 150 ± 1 | 437 ± 3 | 617 ± 2 | 1015 ± 11 | 1.00x / 1.00x |
+| scidocs | wand | 274 ± 14 | 1074 ± 317 | 693 ± 35 | 1926 ± 372 | 0.55x / 0.89x |
+| scidocs | maxscore | 137 ± 1 | 405 ± 5 | 496 ± 3 | 1116 ± 20 | 1.09x / 1.24x |
+| trec-covid | taat | 1383 ± 11 | 3113 ± 29 | 1994 ± 18 | 3832 ± 117 | 1.00x / 1.00x |
+| trec-covid | wand | 2018 ± 55 | 8979 ± 253 | 3770 ± 107 | 12571 ± 373 | 0.69x / 0.53x |
+| trec-covid | maxscore | 809 ± 22 | 3316 ± 407 | 2326 ± 7 | 6951 ± 122 | 1.71x / 0.86x |
+
+### Latency, 1 segment (force-merged) (µs, mean ± std of 3 passes)
+
+| dataset | strategy | p50 k=10 | p99 k=10 | p50 k=1000 | p99 k=1000 | p50 speedup vs TAAT (k=10 / k=1000) |
+|---|---|---|---|---|---|---|
+| scifact | taat | 48 ± 1 | 181 ± 55 | 221 ± 2 | 514 ± 112 | 1.00x / 1.00x |
+| scifact | wand | 102 ± 8 | 469 ± 109 | 273 ± 4 | 944 ± 274 | 0.47x / 0.81x |
+| scifact | maxscore | 60 ± 2 | 357 ± 221 | 221 ± 10 | 721 ± 39 | 0.79x / 1.00x |
+| nfcorpus | taat | 7 ± 1 | 71 ± 45 | 27 ± 1 | 283 ± 57 | 1.00x / 1.00x |
+| nfcorpus | wand | 10 ± 0 | 86 ± 2 | 20 ± 2 | 254 ± 60 | 0.71x / 1.34x |
+| nfcorpus | maxscore | 8 ± 0 | 54 ± 5 | 17 ± 1 | 190 ± 7 | 0.89x / 1.56x |
+| fiqa | taat | 451 ± 23 | 1465 ± 368 | 711 ± 29 | 1745 ± 561 | 1.00x / 1.00x |
+| fiqa | wand | 801 ± 20 | 3149 ± 466 | 1553 ± 75 | 4489 ± 225 | 0.56x / 0.46x |
+| fiqa | maxscore | 331 ± 7 | 1167 ± 34 | 1000 ± 20 | 2472 ± 34 | 1.36x / 0.71x |
+| scidocs | taat | 144 ± 2 | 414 ± 3 | 362 ± 3 | 665 ± 14 | 1.00x / 1.00x |
+| scidocs | wand | 259 ± 3 | 872 ± 31 | 651 ± 10 | 1739 ± 31 | 0.56x / 0.56x |
+| scidocs | maxscore | 130 ± 1 | 401 ± 4 | 477 ± 3 | 1102 ± 29 | 1.11x / 0.76x |
+| trec-covid | taat | 1342 ± 50 | 3144 ± 314 | 1826 ± 139 | 3698 ± 308 | 1.00x / 1.00x |
+| trec-covid | wand | 1983 ± 38 | 8793 ± 17 | 3693 ± 15 | 12487 ± 339 | 0.68x / 0.49x |
+| trec-covid | maxscore | 809 ± 17 | 3187 ± 303 | 2314 ± 3 | 6764 ± 196 | 1.66x / 0.79x |
+
+### Pruning work (1 segment): documents fully scored per query vs query-term postings
+
+| dataset | postings per query | BMW scored, k=10 | MaxScore scored, k=10 | BMW scored, k=1000 | MaxScore scored, k=1000 |
+|---|---|---|---|---|---|
+| scifact | 4,376 | 199 (4.6%) | 139 (3.2%) | 2,342 (53.5%) | 2,385 (54.5%) |
+| nfcorpus | 671 | 142 (21.2%) | 146 (21.7%) | 553 (82.3%) | 554 (82.5%) |
+| fiqa | 47,742 | 883 (1.8%) | 270 (0.6%) | 9,216 (19.3%) | 8,103 (17.0%) |
+| scidocs | 16,423 | 353 (2.1%) | 222 (1.4%) | 5,543 (33.8%) | 5,564 (33.9%) |
+| trec-covid | 182,937 | 1,435 (0.8%) | 365 (0.2%) | 17,121 (9.4%) | 11,817 (6.5%) |
+
+### Filtered search (synthetic `bucket` field, k=10 p50 µs, mean ± std of 3 passes)
+
+| dataset | filter (selectivity) | TAAT + filter | BMW + filter | MaxScore + filter | BMW / MaxScore == TAAT? |
+|---|---|---|---|---|---|
+| trec-covid | `bucket:[0 TO 0]` (1%) | 1507 ± 23 | 3074 ± 38 | 1964 ± 8 | identical / identical |
+| trec-covid | `bucket:[0 TO 9]` (10%) | 1670 ± 77 | 2473 ± 8 | 1218 ± 1 | identical / identical |
+| trec-covid | `bucket:[0 TO 49]` (50%) | 2146 ± 162 | 2072 ± 22 | 916 ± 29 | identical / identical |
+| fiqa | `bucket:[0 TO 0]` (1%) | 449 ± 2 | 1066 ± 5 | 739 ± 3 | identical / identical |
+| fiqa | `bucket:[0 TO 9]` (10%) | 480 ± 3 | 882 ± 1 | 512 ± 1 | identical / identical |
+| fiqa | `bucket:[0 TO 49]` (50%) | 614 ± 9 | 786 ± 6 | 382 ± 8 | identical / identical |
+
+### Structured queries (multi-segment index with the bucket field; k=10; µs, mean of 3 passes)
+
+| dataset | query type | queries | p50 | p99 | avg hits | example |
+|---|---|---|---|---|---|---|
+| trec-covid | disjunction | 50 | 885 | 4020 | 10.0 | `what origin covid` |
+| trec-covid | phrase | 50 | 207 | 1527 | 7.7 | `"what origin"` |
+| trec-covid | prefix | 50 | 804 | 18602 | 10.0 | `orig*` |
+| trec-covid | boolean | 50 | 283 | 1215 | 10.0 | `+what origin -covid` |
+| trec-covid | filtered | 50 | 1001 | 3931 | 10.0 | `what origin covid bucket:[0 TO 9]` |
+| fiqa | disjunction | 6648 | 295 | 1088 | 10.0 | `what considered business expense business trip` |
+| fiqa | phrase | 6644 | 157 | 794 | 7.1 | `"what considered"` |
+| fiqa | prefix | 6646 | 79 | 1350 | 9.9 | `cons*` |
+| fiqa | boolean | 6579 | 258 | 692 | 9.9 | `+what consid -busi` |
+| fiqa | filtered | 6648 | 456 | 1471 | 10.0 | `what considered business expense business trip bucket:[0 TO 9]` |
+
+Diagnostic (`results/stage3/wand_debug_trec-covid_k10.txt`, `cargo run --release -p strata-query --example wand_debug -- <trec-covid 1-segment index> data/trec-covid/queries.jsonl 10`). Over all 50 trec-covid queries at k=10, BMW ran 16,366 main-loop iterations per query on average to fully score 1,374 docs. MaxScore ran 18,577 iterations, but each is much cheaper (no re-sorting of cursors, no block-bound sums), and fully scored only 338 docs. The tool also asserts, per query, that TAAT, BMW and MaxScore return identical results. It passed on all 50.
+
+## Reading the numbers
+
+- **Exactness.** Block-max WAND and MaxScore return byte-identical run files to the stage-1 exhaustive search on all 5 datasets, with 3 segments and with 1 segment (20/20). They also match with filters (12/12). Property tests check the same bit-for-bit across random corpora, deletes, filters and k. A mutation that makes the bound unsafe (×0.7) fails the test, so the test can detect unsafe pruning.
+- **Speed: honest result.** MaxScore beats exhaustive TAAT at k=10 on the three larger corpora: fiqa 1.23x/1.36x, scidocs 1.09x/1.11x, trec-covid 1.71x/1.66x (multi-segment / 1 segment). It is *slower* on scifact and nfcorpus (5k and 3.6k docs, where TAAT is already 6-60 µs). At k=1000 it is mixed: faster on nfcorpus and scidocs (multi-seg), slower on fiqa and trec-covid. Pruning needs a high threshold, and the 1000th score is low. **Block-max WAND was slower than TAAT in every k=10 configuration measured** (0.47-0.71x). It fully scores only 0.8-4.6% of the query-term postings on four of the datasets (21% on the tiny nfcorpus; trec-covid: 1,435 docs per query vs 182,937 postings), but its per-iteration overhead (re-sorting cursors, summing block bounds) costs more than the decoding and scoring it saves on these corpora. The BEIR queries are long (6-11 terms, many frequent low-IDF words). Our TAAT baseline is a tight loop over decoded blocks with a dense accumulator. The literature's large BMW wins come from short queries over much bigger collections. That is the reason MaxScore is the default.
+- **Filters.** With selective filters (1%) pruning loses: rejected docs never raise the threshold, so MaxScore at 1% is slower than TAAT on both datasets (trec-covid 1,964 vs 1,507 µs). At 50%, MaxScore is 2.3x (trec-covid) and 1.6x (fiqa) faster than TAAT. A filter-driven iteration for very selective filters is future work.
+- **Structured queries** (k=10 p50): phrase queries 157-207 µs, boolean `+a b -c` 258-283 µs. Prefix queries have long tails: trec-covid p99 18.6 ms, because short prefixes expand to hundreds of terms (up to the 1,024-term cap) unioned with constant score.
+- Tests: 79 tests, 10/10 consecutive green runs (`results/stage3/test_10x.txt`).

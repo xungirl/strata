@@ -547,3 +547,95 @@ IDF、avgdl 依赖整个集合；按段算会让同一文档得分随所在段�
 
 **Q10. 压缩后的索引为什么查询比内存版慢？**
 磁盘段要做位解包 + 差值还原（每块 128 个），内存版直接读 8 字节的 `Posting`。BENCHMARK 里磁盘引擎 TAAT 的延迟比内存版高（同一次运行里测的），换来的是索引体积小很多、可以持久化、不需要启动时重建。第三阶段的剪枝（MaxScore/BMW）就是为了少解码、少打分。
+
+---
+
+# Stage 3：查询引擎（Query engine）
+
+> 新 crate：`crates/strata-query`；存储层新增 `fields.rs`（文档元数据列）。目标：动态剪枝（dynamic pruning）的 top-k、布尔/短语/前缀查询、元数据过滤、查询语法解析器——并且剪枝结果和穷举**逐位相同**。
+> 教学顺序：`strata-storage/src/fields.rs → ast.rs → parser.rs → filter.rs → wand.rs → exec.rs → lib.rs → bin/strata-qbench.rs → tests/query_tests.rs`
+
+## 全局图
+
+```
+"+vaccine -mrna \"spike protein\" covi* year:[2019 TO *]"
+        │ parser.rs（用索引的分析器分析词和短语）
+        ▼
+BoolQuery { must, should, must_not, filters }
+        │ lib.rs::search
+        ├── 纯词的析取（BEIR 查询就是这种）──► MaxScore（默认）/ Block-Max WAND / TAAT 穷举
+        └── 其它 ──────────────────────────► exec.rs：DAAT 布尔执行器（交集 / 并集 / 排除 / 短语 / 前缀）
+        每段：filter.rs 把过滤条件编译成「这个文档能不能返回」的判断（tombstone + 元数据列）
+```
+
+## 1. `strata-storage/src/fields.rs` —— 文档元数据列（doc values）
+
+**(a) 骨架**：`FieldValue::{Keyword, Int}`；每段 `fields.json`（字段名、类型、偏移、关键词字典）+ `fields.bin`（每文档一个定宽槽：int 是 i64，keyword 是字典序号 u32）。`Column::int(doc)` / `ord(doc)` 是数组下标访问。
+**(b) 为什么**：过滤要对**候选文档**逐个取值，列式存储（每字段一列）让这一步是 O(1) 数组访问；倒排索引反过来适合「哪些文档有这个值」。Lucene 叫 DocValues。关键词字典放 JSON 里，只适合低基数字段（语言、类别），高基数要用 FST（写明了）。字段类型在 WAL 之前校验，因为一旦 ack 了就不能在 flush 时才失败。
+**(c) 语法**：`#[serde(rename_all = "lowercase")]`；`BTreeMap`/`BTreeSet` 保证字典有序；`(v != MISSING_INT).then_some(v)` —— `bool::then_some` 把条件变成 `Option`。
+
+## 2. `ast.rs` + `parser.rs` —— 查询语法
+
+**(a) 骨架**：`Clause::{Term{term,count}, Phrase, Prefix}`、`Filter::{KeywordEq, IntRange, Not}`、`BoolQuery`。解析器：先 `lex` 切分（引号和方括号内不切），再按前缀 `+/-`、引号、`field:`、结尾 `*` 分类。普通词和短语用索引的分析器分析；前缀只小写不做词干（和 Lucene 通配符一样）。`as_disjunction()` 判断能不能走剪枝算法。
+**(b) 为什么**：语义照搬 Lucene BooleanQuery（must/should/must_not，没有 coord 因子）；重复的普通词计数（qtf），这样 BEIR 原始查询走解析器也得到和第一阶段一样的 BM25。`12:30` 这种不是合法字段名，不当作过滤。没做括号和 AND/OR（写明是限制）。
+**(c) 语法**：`body.strip_prefix('"').and_then(|b| b.strip_suffix('"'))` —— Option 链；`split_once(':').filter(|(f, _)| is_field_name(f))`；`let terms: [BTreeMap<String, u32>; 3] = Default::default();` —— 数组也实现了 `Default`。
+
+## 3. `filter.rs` —— 过滤编译
+
+**(a) 骨架**：把 `Filter` 针对**每个段**编译成 `Cond`（关键词值先换成该段的字典序号，段里没有这个值就直接「全不匹配」），`SegmentFilter::allows(doc)` = 未删除 && 所有条件为真。
+**(b) 为什么**：惰性求值——只对候选文档判断，没过滤时零开销。另一种做法是先算出整段的位图（适合非常选择性的过滤，可以反过来驱动迭代），这里没做，BENCHMARK 里能看到高选择性过滤（1%）时剪枝效率下降的现象。
+**(c) 语法**：`enum Cond<'a> { Ord(Option<Column<'a>>, Option<u32>), .., Not(Box<Cond<'a>>) }` —— 递归 enum 需要 `Box`（否则大小无限）。
+
+## 4. `wand.rs` —— Block-Max WAND 和 MaxScore
+
+**(a) 骨架**
+- 公共部分：每个查询词一个 `Bm25TermScorer`（全局统计量），全局 top-k 堆跨段共享（段按顺序、文档号递增），每个词的**列表上界** `ub = max over blocks score(max_tf, min_doc_len)`。
+- **BMW**：游标按当前文档排序 → 累加 ub 找 pivot（累计上界第一次超过门槛 θ 的位置）→ 用跳表算 pivot 所在块的上界之和（不解码）→ 如果块上界也超不过 θ，跳到最短块的末尾之后 → 否则所有游标都在 pivot 上就完整打分，不然把落后的游标推到 pivot。
+- **MaxScore**：词按 ub 升序；θ 一旦确定，ub 前缀和 ≤ θ 的那些词是「非必要词」（non-essential）：只匹配它们的文档不可能进 top-k。候选只从必要词的 postings 里取；对每个候选，按 ub 从高到低去非必要词里 `advance_to` 查分，一旦「已得分 + 剩余上界」≤ θ 就放弃。
+
+**(b) 为什么**
+- **精确性（面试重点）**：三个条件保证剪枝版和穷举版**逐位相同**：① 分数按同样的词序求和（和 TAAT 累加器的 f32 加法顺序一致）；② 全局按文档号递增访问，分数等于 θ 的候选在平局规则下必输，所以「上界 ≤ θ 就剪」不丢东西；③ f32 舍入：剪枝条件是 `bound × (1 + 1e-5) ≤ θ`，留出远大于累计舍入误差的余量。用 proptest（多段、删除、过滤、各种 k）验证，并且做了**变异测试**：把上界故意缩小到 0.7 倍，测试立刻失败——证明测试真的能抓到不安全的剪枝。BEIR 5 个数据集上 run 文件和第一阶段逐字节相同。
+- **性能故事（真实踩坑）**：
+  1. 第一版 BMW 比穷举 TAAT 还慢（开发时在负载下的一次单次测量，scifact k=10：238µs vs 43µs；不是正式基准）。原因之一：每轮排序时移动的是游标结构体本身，每个游标带两个 128 元素的解码缓冲区（>1KB）。改成排序下标数组。
+  2. `advance_to` 在跳表里线性扫描 → 改成二分；块上界加缓存。
+  3. 还是不够：trec-covid 上 BMW 每个查询平均只完整打分 1,374 个文档（穷举要碰约 18 万个 posting），但主循环平均迭代 16,366 次，每次的排序/找 pivot/算块上界开销把收益吃掉了（`results/stage3/wand_debug_trec-covid_k10.txt`）。这些 BEIR 查询很长（6–11 个词），里面很多高频低 IDF 词（what/have/been）。
+  4. 于是实现了 **MaxScore**：它把高频低权重词变成「非必要」，候选只来自少数稀有词。迭代数其实差不多（18,577），但每次迭代便宜得多（不排序、不算块上界），完整打分只有 338 个文档。正式基准：k=10 时 MaxScore 在 fiqa / scidocs / trec-covid 上比 TAAT 快 1.1–1.7 倍，在两个很小的数据集上反而更慢；BMW 在所有 k=10 配置下都比 TAAT 慢（0.47–0.71 倍）。所以默认用 MaxScore。Lucene 9.x 对析取查询用的也是（块级）MaxScore。
+  5. 诚实结论：在这些小语料、长查询上，剪枝的收益有限；k=1000 时门槛太低，经常不如穷举。
+- **为什么剪枝在小语料上收益有限**：TAAT 用稠密累加器、顺序解码，每个 posting 只要几纳秒；剪枝算法每一步有分支和随机跳转。只有当 posting 列表很长、k 很小时剪枝才明显划算。
+**(c) 语法**：`impl Ord for Entry`（score 用 `total_cmp`，平局时反向比较文档号）；`BinaryHeap<Reverse<Entry>>` 小顶堆；`peek_mut` 原地替换堆顶；`cursors.sort_by(|a, b| a.ub.total_cmp(&b.ub))`；`Option<f32>` 数组 `contrib` 按词序暂存贡献再求和；`for s in contrib.iter_mut() { if let Some(v) = s.take() { .. } }` —— `Option::take` 取出值并留下 `None`，顺便清空。
+
+## 5. `exec.rs` —— 布尔 / 短语 / 前缀执行器
+
+**(a) 骨架**：`trait Matcher { advance_to(target) -> doc; score(doc_len) }`，三种实现：`TermMatcher`、`PhraseMatcher`（各词游标跳到同一文档后检查位置是否连续 p, p+1, ...，短语频率当 tf，IDF 取各词之和——Lucene PhraseQuery 的做法）、`PrefixMatcher`（FST 范围遍历展开成最多 1024 个词，并集，常数分 1.0——Lucene 默认的 constant-score rewrite）。`run`：有 must 时用 leapfrog 求交集，否则 should 求并集；must_not 命中则排除；分数 = must 分数 + 命中的 should 分数（按子句顺序）。
+**(b) 为什么**：DAAT 每次只看一个文档，天然支持交集、排除和位置检查；穷举但不慢（交集会让候选少很多）。前缀展开超过上限就报错而不是悄悄截断（截断会让结果「看起来对」但其实不完整）。正确性：proptest 和一个直接在原始 token 上算的朴素实现对比（含短语、前缀、过滤、删除）。
+**(c) 语法**：`Box<dyn Matcher + 'a>` —— trait 对象（动态分发），因为一个查询里混着不同类型的子句；`+ 'a` 说明它借用了段的数据。`let parts: Option<Vec<_>> = terms.iter().map(|t| seg.cursor(t)).collect();` —— `Option` 也能 `collect`：只要有一个 `None` 结果就是 `None`（短语里有词不存在 → 这个段不可能匹配）。
+
+## 6. `bin/strata-qbench.rs`
+
+从 BEIR 查询文本生成短语（前两个非停用词）、前缀（最长词前 4 个字母）、布尔（`+t1 t2 -t3`）、过滤（`bucket:[0 TO 9]`，合成字段 = FNV-1a(id) % 100）查询，测 p50/p99。`bucket` 是合成的（BEIR 没有元数据），文档里写明。
+
+## Stage 3 面试问答
+
+**Q1. WAND 的核心思想？pivot 是什么？**
+每个词有一个分数上界。游标按当前文档号排序，从前往后累加上界，第一次超过当前第 k 名分数 θ 的位置就是 pivot。pivot 之前的文档最多只能匹配 pivot 之前的那些词，它们的上界加起来都不到 θ，所以可以直接跳过，把落后的游标推到 pivot 文档。
+
+**Q2. Block-Max WAND 比 WAND 多了什么？**
+上界细化到每个 128 文档的块：我们在跳表里存了每块的 `max_tf` 和 `min_doc_len`，所以 `score(max_tf, min_doc_len)` 是块内上界。pivot 通过了列表级检查之后，再用块级上界检查一次，不过就跳到块末尾，连块都不用解码。
+
+**Q3. MaxScore 和 WAND 有什么区别？什么时候谁更好？**
+WAND 每一步动态找 pivot；MaxScore 按上界把词静态分成必要/非必要两组（θ 变大时边界右移），候选只从必要词出。长查询、包含很多高频低权重词时 MaxScore 更好（我们的 BEIR 结果就是这样：trec-covid k=10 p50 809µs vs BMW 1,983µs vs TAAT 1,342µs，单段）；短查询、词权重接近时 BMW 的块级跳跃更有优势。
+
+**Q4. 你怎么保证剪枝不改变结果？浮点数怎么办？**
+见上文三个条件：同样的求和顺序、按文档号递增访问使平局必输、上界留 1e-5 的相对余量。测试：proptest 逐位比较 + 变异测试 + 5 个 BEIR 数据集 run 文件逐字节一致。
+
+**Q5. 为什么一开始你的 WAND 比穷举还慢？怎么定位的？**
+加了计数器（打分文档数、跳块次数、主循环迭代数）写了个诊断程序逐查询打印：打分文档只有穷举的 1%，但迭代数是打分数的 10–20 倍，说明开销在循环本身。修了「排序时移动大结构体」「跳表线性扫描」，然后换成更适合这些长查询的 MaxScore。教训：先测再猜；算法复杂度好不等于常数小。
+
+**Q6. 短语查询怎么实现？为什么需要位置信息？**
+先让各词游标对齐到同一文档（交集），再检查位置：对第一个词的每个位置 p，其它第 j 个词必须有位置 p+j。位置在第二阶段就写进了 `positions.bin`（varint 差值），按块记录偏移，顺序读取时是 O(总位置数)。
+
+**Q7. 过滤为什么会让剪枝变差？**
+过滤掉的文档不能进堆，θ 涨得慢，剪枝就弱；过滤越严格（1%），越接近穷举。更好的做法是选择性很高时反过来，用过滤结果（位图）驱动迭代。BENCHMARK 里有 1%/10%/50% 三档的数据：1% 时 MaxScore 比 TAAT 慢（trec-covid 1,964 vs 1,507µs），50% 时快 2.3 倍。
+
+**Q8. 前缀查询为什么是常数分？为什么要限制展开数？**
+一个前缀可能展开成上千个词，按 BM25 逐个打分既慢、语义也不明确（稀有词会主导分数），所以 Lucene 默认常数分。展开数上限防止 `a*` 这种查询拖垮服务；超过就报错，不静默截断。

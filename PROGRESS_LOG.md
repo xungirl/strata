@@ -11,3 +11,9 @@
 - Headline: disk engine (WAL + bit-packed mmap segments + merges) returns byte-identical BEIR run files to stage 1 on 5/5 datasets (`results/stage2/parity/`).
 - Headline: 100 kill -9 iterations, 113,480 acked adds + 2,639 acked deletes, 0 lost / 0 resurrected; negative control caught 147 lost (`results/stage2/chaos*.json`). Index 3.7-4.8 B/posting with positions, 1.02-1.24x Tantivy-with-positions (`results/stage2/tables.md`).
 - Caveats: process-crash durability only (not power loss); no writer lock file; disk queries 1.4-1.8x slower than in-memory; fiqa/scidocs timings re-run after compile interference (originals in `results/stage2/superseded/`).
+
+## Stage 3: Query engine (tag `stage-3`)
+- Tests: 79 tests, 10/10 consecutive green runs (`results/stage3/test_10x.txt`); clippy -D warnings + fmt clean.
+- Headline: block-max WAND and MaxScore are exact: run files byte-identical to exhaustive on 5/5 datasets × {multi, 1 segment} (20/20) and filtered (12/12) (`results/stage3/parity/`); proptest + mutation check.
+- Headline: MaxScore k=10 p50 vs exhaustive TAAT: trec-covid 1.71x (809 vs 1,383 µs), fiqa 1.23x, scidocs 1.09x (`results/stage3/tables.md`).
+- Caveats: BMW slower than TAAT in every k=10 config (0.47-0.71x); pruning slower than TAAT on tiny corpora, at k=1000 on fiqa/trec-covid, and with 1% filters; flat query language only.
