@@ -152,6 +152,13 @@ pub struct Searcher<'s, S: SegmentReader> {
     segment: &'s S,
     params: Bm25Params,
     stats: CollectionStats,
+    /// Optional source of *global* document frequencies (multi-segment /
+    /// multi-shard search). `&dyn Fn` is a borrowed closure: any function
+    /// or closure with this signature works.
+    global_df: Option<&'s dyn Fn(&str) -> u64>,
+    /// Optional liveness filter: documents for which it returns `false`
+    /// (e.g. deleted ones) are never returned.
+    is_live: Option<&'s dyn Fn(DocId) -> bool>,
 }
 
 impl<'s, S: SegmentReader> Searcher<'s, S> {
@@ -163,14 +170,34 @@ impl<'s, S: SegmentReader> Searcher<'s, S> {
     /// Search with externally supplied statistics (`N`, `avgdl`). With
     /// several segments or shards, pass the *global* statistics so a document's
     /// score does not depend on where it is stored. (Stage 1 still takes `df`
-    /// from the segment; a global term-statistics source arrives with
-    /// multi-segment search.)
+    /// from the segment unless [`with_global_df`](Self::with_global_df) is
+    /// also used.)
     pub fn with_stats(segment: &'s S, params: Bm25Params, stats: CollectionStats) -> Self {
         Searcher {
             segment,
             params,
             stats,
+            global_df: None,
+            is_live: None,
         }
+    }
+
+    /// Use `df(term)` instead of the segment's own document frequency, so IDF
+    /// is computed over the whole index (all segments / shards).
+    pub fn with_global_df(mut self, df: &'s dyn Fn(&str) -> u64) -> Self {
+        self.global_df = Some(df);
+        self
+    }
+
+    /// Only return documents for which `is_live(doc)` is true (deletes).
+    pub fn with_live_filter(mut self, is_live: &'s dyn Fn(DocId) -> bool) -> Self {
+        self.is_live = Some(is_live);
+        self
+    }
+
+    /// Statistics used for scoring.
+    pub fn stats(&self) -> CollectionStats {
+        self.stats
     }
 
     /// BM25 parameters in use.
@@ -186,8 +213,9 @@ impl<'s, S: SegmentReader> Searcher<'s, S> {
         // costs O(matching docs), not O(all docs).
         let mut touched: Vec<DocId> = Vec::new();
         self.accumulate(query, &mut scores, &mut touched);
+        let live = |doc: &DocId| self.is_live.is_none_or(|f| f(*doc));
         top_k(
-            touched.into_iter().map(|doc| Hit {
+            touched.into_iter().filter(live).map(|doc| Hit {
                 doc,
                 score: scores[doc.as_usize()],
             }),
@@ -207,7 +235,10 @@ impl<'s, S: SegmentReader> Searcher<'s, S> {
             let Some(postings) = self.segment.postings(&qt.term) else {
                 continue; // term not in the index
             };
-            let df = u64::from(self.segment.doc_freq(&qt.term));
+            let df = match self.global_df {
+                Some(global) => global(&qt.term),
+                None => u64::from(self.segment.doc_freq(&qt.term)),
+            };
             let scorer =
                 Bm25TermScorer::new(self.params, idf(self.stats.num_docs, df), qt.count, avgdl);
             for p in postings {
@@ -325,6 +356,21 @@ mod tests {
         // k larger than input returns everything, sorted.
         let all: Vec<u32> = top_k(input, 100).iter().map(|h| h.doc.0).collect();
         assert_eq!(all, vec![1, 0, 2, 9, 5, 7]);
+    }
+
+    #[test]
+    fn global_df_and_live_filter() {
+        let seg = tiny();
+        let df = |_: &str| 1u64; // pretend every term is rare
+        let live = |d: DocId| d != DocId(0);
+        let s = Searcher::new(&seg, Bm25Params::ANSERINI)
+            .with_global_df(&df)
+            .with_live_filter(&live);
+        let hits = s.search(&q("rust"), 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].doc, DocId(3)); // doc 0 filtered out
+        let local = Searcher::new(&seg, Bm25Params::ANSERINI).search(&q("rust"), 10);
+        assert!(hits[0].score > local[1].score); // df 1 < df 2 -> higher idf
     }
 
     #[test]
