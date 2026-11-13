@@ -11,7 +11,8 @@
 //! * `results/<dataset>/<tag>.json`      - metrics, index stats, timings per repeat
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -20,6 +21,7 @@ use serde::Serialize;
 
 use strata_core::analyzer::{StemmerKind, Stopwords};
 use strata_core::scoring::DocLengthEncoding;
+use strata_core::Hit;
 use strata_core::{
     Analyzer, AnalyzerConfig, Bm25Params, InMemoryIndexBuilder, InMemorySegment, Query, Searcher,
     SegmentReader,
@@ -27,6 +29,13 @@ use strata_core::{
 use strata_eval::beir::Dataset;
 use strata_eval::harness::{mean_std, read_trec_run, write_trec_run, LatencyStats};
 use strata_eval::metrics::{evaluate, Evaluation, Run};
+use strata_storage::{Index, IndexConfig, Snapshot, SnapshotHit};
+
+/// The index built for one repeat.
+enum Built {
+    Memory(InMemorySegment),
+    Disk(Arc<Snapshot>),
+}
 
 #[derive(Parser)]
 #[command(
@@ -89,6 +98,31 @@ struct RunArgs {
     /// Name for output files; derived from the settings if omitted.
     #[arg(long)]
     tag: Option<String>,
+    /// `memory`: stage-1 in-memory segment. `disk`: stage-2 durable index
+    /// (WAL + mmap segments + merges).
+    #[arg(long, value_enum, default_value_t = Engine::Memory)]
+    engine: Engine,
+    /// Parent directory for disk indexes (one subdirectory per dataset/tag).
+    #[arg(long, default_value = "data/indexes")]
+    index_dir: PathBuf,
+    /// Disk engine: docs per flushed segment.
+    #[arg(long, default_value_t = 10_000)]
+    flush_docs: usize,
+    /// Disk engine: merge factor (0 = no merges).
+    #[arg(long, default_value_t = 4)]
+    merge_factor: usize,
+    /// Disk engine: docs per `add_documents` call (= per WAL fsync).
+    #[arg(long, default_value_t = 1000)]
+    batch: usize,
+    /// Disk engine: merge down to one segment after ingest.
+    #[arg(long)]
+    force_merge: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, ValueEnum, Serialize)]
+enum Engine {
+    Memory,
+    Disk,
 }
 
 #[derive(Clone, Copy, ValueEnum, Serialize)]
@@ -150,7 +184,16 @@ impl RunArgs {
                 Stop::Lucene => "lucenestop",
                 Stop::None => "nostop",
             };
-            format!("strata.k1_{}.b_{}.{dl}.{stem}.{stop}", self.k1, self.b)
+            let engine = match self.engine {
+                Engine::Memory => "strata".to_string(),
+                Engine::Disk => format!(
+                    "strata-disk.f{}.m{}{}",
+                    self.flush_docs,
+                    self.merge_factor,
+                    if self.force_merge { ".fm" } else { "" }
+                ),
+            };
+            format!("{engine}.k1_{}.b_{}.{dl}.{stem}.{stop}", self.k1, self.b)
         })
     }
 }
@@ -158,7 +201,8 @@ impl RunArgs {
 /// Everything recorded for one run, serialized to JSON.
 #[derive(Serialize)]
 struct Report {
-    engine: &'static str,
+    engine: Engine,
+    disk: Option<DiskStats>,
     dataset: String,
     tag: String,
     analyzer: AnalyzerConfig,
@@ -171,6 +215,21 @@ struct Report {
     repeats: Vec<Repeat>,
     summary: Summary,
     unix_time: u64,
+}
+
+/// Disk-engine facts, from the first repeat.
+#[derive(Serialize, Clone)]
+struct DiskStats {
+    flush_docs: usize,
+    merge_factor: usize,
+    batch: usize,
+    force_merge: bool,
+    segments: usize,
+    /// Bytes of all segment files (WAL and tombstones excluded).
+    segment_bytes: u64,
+    /// Bytes of the whole index directory after the final commit.
+    dir_bytes: u64,
+    fsyncs_for_ingest: usize,
 }
 
 #[derive(Serialize)]
@@ -188,6 +247,9 @@ struct IndexStats {
 struct Repeat {
     /// Analysis only (no indexing), to show how much of indexing is analysis.
     analyze_secs: f64,
+    /// 1-minute load average before this repeat (`sysctl vm.loadavg`), to
+    /// flag noisy measurements.
+    load_avg_1m: f64,
     index_secs: f64,
     docs_per_sec: f64,
     /// Latency of the evaluated run (top `--hits`, default 1000).
@@ -236,17 +298,101 @@ fn build_index(ds: &Dataset, config: &AnalyzerConfig) -> (InMemorySegment, Durat
     (segment, start.elapsed())
 }
 
-/// Run every query once; returns the run and per-query engine latencies
-/// (query analysis + search; excludes turning hits into strings).
-fn run_queries(
+/// Build a durable on-disk index from scratch in `dir`. The timed region
+/// covers WAL appends (one fsync per batch), flushes, background merges and
+/// the final commit / merges.
+fn build_disk_index(
     ds: &Dataset,
-    segment: &InMemorySegment,
+    config: &AnalyzerConfig,
+    args: &RunArgs,
+    dir: &Path,
+) -> Result<(Arc<Index>, Duration, DiskStats)> {
+    if dir.exists() {
+        std::fs::remove_dir_all(dir)?;
+    }
+    let start = Instant::now();
+    let cfg = IndexConfig {
+        analyzer: config.clone(),
+        flush_docs: args.flush_docs,
+        merge_factor: args.merge_factor,
+        background_merges: true,
+    };
+    let (index, _) = Index::open(dir, cfg)?;
+    let mut fsyncs = 0;
+    for chunk in ds.corpus.chunks(args.batch.max(1)) {
+        let docs: Vec<(String, String)> = chunk
+            .iter()
+            .map(|d| (d.id.clone(), d.flat_text()))
+            .collect();
+        index.add_documents(&docs)?;
+        fsyncs += 1;
+    }
+    index.commit()?;
+    index.merge_pending()?;
+    if args.force_merge {
+        index.force_merge()?;
+    }
+    let elapsed = start.elapsed();
+    let snap = index.snapshot();
+    let mut segment_bytes = 0;
+    for s in snap.segments() {
+        segment_bytes += s.segment.size_on_disk()?;
+    }
+    let stats = DiskStats {
+        flush_docs: args.flush_docs,
+        merge_factor: args.merge_factor,
+        batch: args.batch,
+        force_merge: args.force_merge,
+        segments: snap.segments().len(),
+        segment_bytes,
+        dir_bytes: dir_size(dir)?,
+        fsyncs_for_ingest: fsyncs,
+    };
+    Ok((index, elapsed, stats))
+}
+
+fn dir_size(dir: &Path) -> Result<u64> {
+    let mut total = 0;
+    for e in std::fs::read_dir(dir)? {
+        let e = e?;
+        let md = e.metadata()?;
+        total += if md.is_dir() {
+            dir_size(&e.path())?
+        } else {
+            md.len()
+        };
+    }
+    Ok(total)
+}
+
+/// 1-minute load average via `sysctl -n vm.loadavg` (macOS), or NaN.
+fn load_avg_1m() -> f64 {
+    std::process::Command::new("sysctl")
+        .args(["-n", "vm.loadavg"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| {
+            s.trim_matches(|c| c == '{' || c == '}' || c == ' ' || c == '\n')
+                .split_whitespace()
+                .next()
+                .map(str::to_string)
+        })
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(f64::NAN)
+}
+
+/// Run every query once with `search`; returns the run and per-query engine
+/// latencies (query analysis + search). `resolve` (turning a hit into an
+/// external id + score) runs outside the timed region.
+fn run_queries<H>(
+    ds: &Dataset,
     analyzer: &Analyzer,
-    params: Bm25Params,
     hits: usize,
     remove_self_hits: bool,
+    search: impl Fn(&Query, usize) -> Vec<H>,
+    resolve: impl Fn(&H) -> (String, f64),
 ) -> (Run, Vec<Duration>) {
-    let searcher = Searcher::new(segment, params);
     let mut run: Run = HashMap::with_capacity(ds.queries.len());
     let mut latencies = Vec::with_capacity(ds.queries.len());
     // Ask for one extra hit so dropping a self-hit still leaves `hits`.
@@ -254,12 +400,12 @@ fn run_queries(
     for (qid, text) in &ds.queries {
         let start = Instant::now();
         let query = Query::bag_of_words(analyzer, text);
-        let top = searcher.search(&query, k);
+        let top = search(&query, k);
         latencies.push(start.elapsed());
 
         let results: Vec<(String, f64)> = top
             .iter()
-            .map(|h| (segment.external_id(h.doc).to_string(), f64::from(h.score)))
+            .map(&resolve)
             .filter(|(doc, _)| !(remove_self_hits && doc == qid))
             .take(hits)
             .collect();
@@ -286,6 +432,7 @@ fn run(args: RunArgs) -> Result<()> {
     );
 
     let analyzer = Analyzer::new(config.clone());
+    let mut disk_stats: Option<DiskStats> = None;
     let mut repeats = Vec::new();
     let mut first: Option<(Run, IndexStats)> = None;
     for r in 0..args.repeats.max(1) {
@@ -300,23 +447,48 @@ fn run(args: RunArgs) -> Result<()> {
         }
         let analyze_secs = a_start.elapsed().as_secs_f64();
 
-        let (segment, index_time) = build_index(&ds, &config);
-        assert_eq!(tokens as u64, segment.total_tokens());
-        let (run, latencies) = run_queries(
-            &ds,
-            &segment,
-            &analyzer,
-            params,
-            args.hits,
-            remove_self_hits,
-        );
+        let load_avg = load_avg_1m();
+        let (built, index_time) = match args.engine {
+            Engine::Memory => {
+                let (segment, t) = build_index(&ds, &config);
+                assert_eq!(tokens as u64, segment.total_tokens());
+                (Built::Memory(segment), t)
+            }
+            Engine::Disk => {
+                let dir = args.index_dir.join(format!("{}.{tag}", ds.name));
+                let (index, t, stats) = build_disk_index(&ds, &config, &args, &dir)?;
+                assert_eq!(tokens as u64, index.snapshot().stats().total_tokens);
+                disk_stats.get_or_insert(stats);
+                (Built::Disk(index.snapshot()), t)
+            }
+        };
+        let (run, latencies, latencies_k10) = match &built {
+            Built::Memory(segment) => {
+                let searcher = Searcher::new(segment, params);
+                let search = |q: &Query, k: usize| searcher.search(q, k);
+                let resolve =
+                    |h: &Hit| (segment.external_id(h.doc).to_string(), f64::from(h.score));
+                let (run, lat) =
+                    run_queries(&ds, &analyzer, args.hits, remove_self_hits, search, resolve);
+                let (_, lat10) = run_queries(&ds, &analyzer, 10, remove_self_hits, search, resolve);
+                (run, lat, lat10)
+            }
+            Built::Disk(snap) => {
+                let search = |q: &Query, k: usize| snap.search(q, params, k);
+                let resolve =
+                    |h: &SnapshotHit| (snap.external_id(h).to_string(), f64::from(h.score));
+                let (run, lat) =
+                    run_queries(&ds, &analyzer, args.hits, remove_self_hits, search, resolve);
+                let (_, lat10) = run_queries(&ds, &analyzer, 10, remove_self_hits, search, resolve);
+                (run, lat, lat10)
+            }
+        };
         let latency = LatencyStats::from_samples(&latencies);
-        let (_, latencies_k10) =
-            run_queries(&ds, &segment, &analyzer, params, 10, remove_self_hits);
         let latency_k10 = LatencyStats::from_samples(&latencies_k10);
         let index_secs = index_time.as_secs_f64();
         let rep = Repeat {
             analyze_secs,
+            load_avg_1m: load_avg,
             index_secs,
             docs_per_sec: ds.corpus.len() as f64 / index_secs,
             latency,
@@ -331,13 +503,28 @@ fn run(args: RunArgs) -> Result<()> {
 
         match &first {
             None => {
-                let stats = IndexStats {
-                    docs: segment.num_docs(),
-                    terms: segment.num_terms(),
-                    postings: segment.num_postings(),
-                    total_tokens: segment.total_tokens(),
-                    avg_doc_len: segment.stats().avg_doc_len(),
-                    heap_size_bytes_estimate: segment.heap_size_bytes(),
+                let stats = match &built {
+                    Built::Memory(segment) => IndexStats {
+                        docs: segment.num_docs(),
+                        terms: segment.num_terms(),
+                        postings: segment.num_postings(),
+                        total_tokens: segment.total_tokens(),
+                        avg_doc_len: segment.stats().avg_doc_len(),
+                        heap_size_bytes_estimate: segment.heap_size_bytes(),
+                    },
+                    Built::Disk(snap) => IndexStats {
+                        docs: snap.stats().num_docs as u32,
+                        // Sum over segments (a term in two segments counts twice).
+                        terms: snap.segments().iter().map(|s| s.segment.num_terms()).sum(),
+                        postings: snap
+                            .segments()
+                            .iter()
+                            .map(|s| s.segment.meta().num_postings as usize)
+                            .sum(),
+                        total_tokens: snap.stats().total_tokens,
+                        avg_doc_len: snap.stats().avg_doc_len(),
+                        heap_size_bytes_estimate: 0,
+                    },
                 };
                 first = Some((run, stats));
             }
@@ -364,7 +551,8 @@ fn run(args: RunArgs) -> Result<()> {
     let (p99_k10, _) = mean_std(&col(|r| r.latency_k10.p99_us));
 
     let report = Report {
-        engine: "strata",
+        engine: args.engine,
+        disk: disk_stats,
         dataset: ds.name.clone(),
         tag: tag.clone(),
         analyzer: config,

@@ -65,6 +65,10 @@ struct Args {
     repeats: usize,
     #[arg(long, default_value = "results")]
     results_dir: PathBuf,
+    /// Also index token positions (needed for phrase queries; makes the
+    /// index-size comparison with strata's on-disk segments fair).
+    #[arg(long)]
+    positions: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, ValueEnum, Serialize)]
@@ -140,7 +144,7 @@ fn text_analyzer(tok: Tok) -> TextAnalyzer {
     }
 }
 
-fn build(ds: &Dataset, tok: Tok) -> Result<Built> {
+fn build(ds: &Dataset, tok: Tok, positions: bool) -> Result<Built> {
     let mut sb = Schema::builder();
     // Corpus position as a fast field (columnar) so mapping hits back to ids
     // is an array lookup rather than a stored-document fetch.
@@ -150,7 +154,11 @@ fn build(ds: &Dataset, tok: Tok) -> Result<Built> {
         TextOptions::default().set_indexing_options(
             TextFieldIndexing::default()
                 .set_tokenizer(TOKENIZER_NAME)
-                .set_index_option(IndexRecordOption::WithFreqs),
+                .set_index_option(if positions {
+                    IndexRecordOption::WithFreqsAndPositions
+                } else {
+                    IndexRecordOption::WithFreqs
+                }),
         ),
     );
     let index = Index::create_in_ram(sb.build());
@@ -259,12 +267,15 @@ fn main() -> Result<()> {
         .next()
         .unwrap_or("tantivy")
         .replace(" v", "-");
-    let tag = format!("{version}.{tok_name}");
+    let tag = format!(
+        "{version}.{tok_name}{}",
+        if args.positions { ".pos" } else { "" }
+    );
 
     let mut repeats = Vec::new();
     let mut first_run: Option<Run> = None;
     for r in 0..args.repeats.max(1) {
-        let built = build(&ds, args.tokenizer)?;
+        let built = build(&ds, args.tokenizer, args.positions)?;
         let searcher = built.index.reader()?.searcher();
         let index_bytes = searcher.space_usage()?.total().get_bytes();
         let (run, latencies) = run_once(&ds, &built, args.tokenizer, args.hits)?;
