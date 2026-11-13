@@ -15,7 +15,8 @@ mkdir -p $S/logs $S/parity
 export LOAD_LOG=$S/load.log
 cargo build --release -q -p strata-eval -p strata-bench -p strata-storage
 EVAL=target/release/strata-eval
-BASE=strata.k1_0.9.b_0.4.exactlen.porter.lucenestop
+BASE=strata.k1_0.9.b_0.4.exactlen.porter.lucenestop   # stage-1 reference tag
+SUFFIX=k1_0.9.b_0.4.exactlen.porter.lucenestop
 
 {
   echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -30,7 +31,7 @@ run_eval() { # dataset args...
   local d=$1; shift
   wait_for_quiet "$d $*"
   local out
-  out=$($EVAL run --dataset "$d" --repeats 3 "$@" 2> $S/logs/tmp.log)
+  out=$($EVAL run --dataset "$d" --repeats 3 --results-dir $S "$@" 2> $S/logs/tmp.log)
   local tag; tag=$(echo "$out" | cut -f2)
   { echo "# uptime: $(uptime)"; cat $S/logs/tmp.log; echo "$out"; } > "$S/logs/$d.$tag.log"
   echo "$out" | tee -a $S/summary.tsv
@@ -40,8 +41,8 @@ parity() { # dataset tag
   local d=$1 tag=$2 f=$S/parity/$d.$2.txt
   {
     echo "stage-1 in-memory run vs $tag"
-    python3 -I scripts/compare_runs.py --depth 1000 "$R/runs/$d/$BASE.trec" "$R/runs/$d/$tag.trec"
-    if cmp -s <(cut -d' ' -f1-5 "$R/runs/$d/$BASE.trec") <(cut -d' ' -f1-5 "$R/runs/$d/$tag.trec"); then
+    python3 -I scripts/compare_runs.py --depth 1000 "$R/runs/$d/$BASE.trec" "$S/runs/$d/$tag.trec"
+    if cmp -s <(cut -d' ' -f1-5 "$R/runs/$d/$BASE.trec") <(cut -d' ' -f1-5 "$S/runs/$d/$tag.trec"); then
       echo "run files byte-identical (qid, docid, rank, score columns): YES"
     else
       echo "run files byte-identical (qid, docid, rank, score columns): NO"
@@ -51,13 +52,13 @@ parity() { # dataset tag
 
 for d in "${DATASETS[@]}"; do
   echo "=================== $d"
-  run_eval "$d"                                        # in-memory, same session (latency reference)
+  run_eval "$d" --tag "strata-mem-session2.$SUFFIX"     # in-memory, same session (latency reference)
   run_eval "$d" --engine disk                          # flush 10k docs, merge factor 4
-  parity "$d" strata-disk.f10000.m4.$BASE
+  parity "$d" strata-disk.f10000.m4.$SUFFIX
   run_eval "$d" --engine disk --force-merge            # one segment
-  parity "$d" strata-disk.f10000.m4.fm.$BASE
+  parity "$d" strata-disk.f10000.m4.fm.$SUFFIX
   wait_for_quiet "$d tantivy positions"
-  target/release/strata-bench tantivy --dataset "$d" --positions --repeats 3 2> "$S/logs/$d.tantivy-pos.log" | tee -a $S/summary.tsv
+  target/release/strata-bench tantivy --dataset "$d" --positions --repeats 3 --results-dir $S 2> "$S/logs/$d.tantivy-pos.log" | tee -a $S/summary.tsv
 done
 
 # WAL group-commit: ingest cost vs batch size (= docs per fsync), scifact.
