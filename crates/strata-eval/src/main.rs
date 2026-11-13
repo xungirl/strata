@@ -27,8 +27,10 @@ use strata_core::{
     SegmentReader,
 };
 use strata_eval::beir::Dataset;
+use strata_eval::fusion::{rrf, weighted, Norm};
 use strata_eval::harness::{mean_std, read_trec_run, write_trec_run, LatencyStats};
 use strata_eval::metrics::{evaluate, Evaluation, Run};
+use strata_eval::stats::paired;
 use strata_query::{BoolQuery, Clause};
 use strata_storage::{Document, FieldValue, Fields, Index, IndexConfig, Snapshot, SnapshotHit};
 
@@ -63,6 +65,41 @@ enum Command {
         #[arg(long, default_value = "test")]
         split: String,
     },
+    /// Fuse a lexical and a dense run (RRF, weighted min-max / z-score),
+    /// evaluate every variant and test significance against both inputs.
+    Hybrid(HybridArgs),
+    /// Paired significance test of run B vs run A (per-query metrics).
+    Compare {
+        #[arg(long)]
+        dataset: String,
+        #[arg(long)]
+        a: PathBuf,
+        #[arg(long)]
+        b: PathBuf,
+        #[arg(long, default_value = "data")]
+        data_dir: PathBuf,
+        #[arg(long, default_value_t = 100_000)]
+        samples: usize,
+    },
+}
+
+#[derive(clap::Args)]
+struct HybridArgs {
+    #[arg(long)]
+    dataset: String,
+    #[arg(long, default_value = "data")]
+    data_dir: PathBuf,
+    /// Lexical (BM25) TREC run, top 1000.
+    #[arg(long)]
+    lexical: PathBuf,
+    /// Dense TREC run, top 1000.
+    #[arg(long)]
+    dense: PathBuf,
+    /// Output directory (JSON report + fused runs under runs/).
+    #[arg(long, default_value = "results/stage5")]
+    out_dir: PathBuf,
+    #[arg(long, default_value_t = 100_000)]
+    samples: usize,
 }
 
 #[derive(clap::Args)]
@@ -330,7 +367,114 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&e)?);
             Ok(())
         }
+        Command::Hybrid(args) => hybrid(args),
+        Command::Compare {
+            dataset,
+            a,
+            b,
+            data_dir,
+            samples,
+        } => {
+            let ds = Dataset::load(&data_dir, &dataset, "test")?;
+            let ea = evaluate(&ds.qrels, &read_trec_run(&a)?);
+            let eb = evaluate(&ds.qrels, &read_trec_run(&b)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&compare(&ea, &eb, samples))?
+            );
+            Ok(())
+        }
     }
+}
+
+/// Paired tests on nDCG@10 and Recall@100 (B vs A).
+fn compare(a: &Evaluation, b: &Evaluation, samples: usize) -> serde_json::Value {
+    let get = |e: &Evaluation, f: fn(&strata_eval::metrics::QueryMetrics) -> f64| -> Vec<f64> {
+        e.per_query.values().map(f).collect()
+    };
+    let nd = paired(
+        &get(a, |m| m.ndcg_at_10),
+        &get(b, |m| m.ndcg_at_10),
+        samples,
+        7,
+    );
+    let r100 = paired(
+        &get(a, |m| m.recall_at_100),
+        &get(b, |m| m.recall_at_100),
+        samples,
+        11,
+    );
+    serde_json::json!({ "ndcg_at_10": nd, "recall_at_100": r100 })
+}
+
+fn hybrid(args: HybridArgs) -> Result<()> {
+    let ds = Dataset::load(&args.data_dir, &args.dataset, "test")?;
+    let lex = read_trec_run(&args.lexical)?;
+    let dense = read_trec_run(&args.dense)?;
+    let mut variants: Vec<(String, Run)> = vec![
+        ("lexical-bm25".into(), lex.clone()),
+        ("dense".into(), dense.clone()),
+        ("rrf-k60".into(), rrf(&[&lex, &dense], 60.0, 1000)),
+        (
+            "minmax-a0.5".into(),
+            weighted(&lex, &dense, 0.5, Norm::MinMax, 1000),
+        ),
+        (
+            "zscore-a0.5".into(),
+            weighted(&lex, &dense, 0.5, Norm::ZScore, 1000),
+        ),
+    ];
+    // Sensitivity sweep over alpha. Reported separately as an *oracle*
+    // analysis: picking the best alpha on the test queries is not a fair result.
+    for i in 0..=10 {
+        let alpha = i as f64 / 10.0;
+        variants.push((
+            format!("sweep-minmax-a{alpha:.1}"),
+            weighted(&lex, &dense, alpha, Norm::MinMax, 1000),
+        ));
+    }
+    let evals: Vec<(String, Evaluation)> = variants
+        .iter()
+        .map(|(n, r)| (n.clone(), evaluate(&ds.qrels, r)))
+        .collect();
+    let runs_dir = args.out_dir.join("runs").join(&ds.name);
+    for (name, run) in &variants {
+        if !name.starts_with("sweep") {
+            write_trec_run(&runs_dir.join(format!("{name}.trec")), run, name)?;
+        }
+    }
+    let find = |n: &str| &evals.iter().find(|(m, _)| m == n).expect("variant").1;
+    let mut report = serde_json::Map::new();
+    report.insert("dataset".into(), ds.name.clone().into());
+    let mut metrics = serde_json::Map::new();
+    for (name, e) in &evals {
+        metrics.insert(name.clone(), serde_json::to_value(e.mean)?);
+    }
+    report.insert("metrics".into(), metrics.into());
+    let mut tests = serde_json::Map::new();
+    for v in ["rrf-k60", "minmax-a0.5", "zscore-a0.5", "dense"] {
+        tests.insert(
+            format!("{v}_vs_lexical"),
+            compare(find("lexical-bm25"), find(v), args.samples),
+        );
+    }
+    for v in ["rrf-k60", "minmax-a0.5", "zscore-a0.5"] {
+        tests.insert(
+            format!("{v}_vs_dense"),
+            compare(find("dense"), find(v), args.samples),
+        );
+    }
+    report.insert("tests".into(), tests.into());
+    std::fs::create_dir_all(&args.out_dir)?;
+    let path = args.out_dir.join(format!("{}.json", ds.name));
+    std::fs::write(&path, serde_json::to_string_pretty(&report)?)?;
+    for (name, e) in &evals {
+        println!(
+            "{}\t{name}\tnDCG@10={:.4}\tR@100={:.4}",
+            ds.name, e.mean.ndcg_at_10, e.mean.recall_at_100
+        );
+    }
+    Ok(())
 }
 
 fn build_index(ds: &Dataset, config: &AnalyzerConfig) -> (InMemorySegment, Duration) {
