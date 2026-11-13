@@ -26,7 +26,7 @@
 //! `Mutex`; the current snapshot behind an `RwLock<Arc<Snapshot>>`, so
 //! taking a snapshot is a cheap reference-count bump.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
@@ -39,12 +39,21 @@ use strata_core::index::SegmentReader;
 use strata_core::types::SegmentId;
 
 use crate::buffer::WriteBuffer;
+use crate::fields::{FieldKind, Fields};
 use crate::livedocs::LiveDocs;
 use crate::manifest::{Manifest, ManifestSegment};
 use crate::merge::{merge_segments, DELETED};
 use crate::segment::{segment_dir_name, DiskSegment};
 use crate::snapshot::Snapshot;
 use crate::wal::{replay, ReplayReport, Wal, WalOp};
+
+/// A document to index: external id, analyzed text, metadata fields.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Document {
+    pub id: String,
+    pub text: String,
+    pub fields: Fields,
+}
 
 /// Tuning knobs.
 #[derive(Clone, Debug)]
@@ -99,6 +108,8 @@ struct WriterState {
     generation: u64,
     /// Segment ids currently being merged.
     merging: HashSet<u32>,
+    /// Kind of every metadata field name used in the index.
+    field_kinds: HashMap<String, FieldKind>,
 }
 
 /// A durable index. Create with [`Index::open`]; share via `Arc<Index>`.
@@ -190,7 +201,13 @@ impl Index {
             next_segment_id: manifest.next_segment_id,
             generation: manifest.generation,
             merging: HashSet::new(),
+            field_kinds: HashMap::new(),
         };
+        for s in &state.segments {
+            for (name, kind) in s.seg.fields().kinds() {
+                state.field_kinds.insert(name.to_string(), kind);
+            }
+        }
         for (_, op) in &ops {
             state.apply(op);
         }
@@ -213,14 +230,31 @@ impl Index {
         &self.dir
     }
 
-    /// Add (or replace) documents `(external id, text)`. Durable when this
-    /// returns `Ok`. Returns the sequence number of the last op.
+    /// Add (or replace) documents `(external id, text)` without metadata.
+    /// Durable when this returns `Ok`. Returns the sequence number of the
+    /// last op.
     pub fn add_documents(self: &Arc<Self>, docs: &[(String, String)]) -> Result<u64> {
         let ops: Vec<WalOp> = docs
             .iter()
             .map(|(id, text)| WalOp::Add {
                 id: id.clone(),
                 text: text.clone(),
+                fields: Fields::new(),
+            })
+            .collect();
+        self.log_and_apply(&ops)
+    }
+
+    /// Add (or replace) documents with metadata fields. A field name must
+    /// keep one kind (keyword or int) across the whole index; a batch
+    /// violating that is rejected *before* anything is logged.
+    pub fn add_docs(self: &Arc<Self>, docs: &[Document]) -> Result<u64> {
+        let ops: Vec<WalOp> = docs
+            .iter()
+            .map(|d| WalOp::Add {
+                id: d.id.clone(),
+                text: d.text.clone(),
+                fields: d.fields.clone(),
             })
             .collect();
         self.log_and_apply(&ops)
@@ -238,6 +272,7 @@ impl Index {
     fn log_and_apply(self: &Arc<Self>, ops: &[WalOp]) -> Result<u64> {
         let should_commit = {
             let mut st = self.state.lock().unwrap();
+            st.check_field_kinds(ops)?;
             let first = st.next_seq;
             st.wal.append(first, ops)?; // fsync: from here on the ops are acknowledged
             for op in ops {
@@ -497,12 +532,37 @@ impl WriterState {
         )
     }
 
+    /// Reject ops that would use a field name with a second kind.
+    fn check_field_kinds(&self, ops: &[WalOp]) -> Result<()> {
+        let mut seen: HashMap<&str, FieldKind> = HashMap::new();
+        for op in ops {
+            if let WalOp::Add { fields, .. } = op {
+                for (name, v) in fields {
+                    let known = self
+                        .field_kinds
+                        .get(name)
+                        .or_else(|| seen.get(name.as_str()));
+                    if let Some(&k) = known {
+                        if k != v.kind() {
+                            bail!("field {name:?} is {k:?} in this index, got {:?}", v.kind());
+                        }
+                    }
+                    seen.insert(name, v.kind());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Apply one logged op to the buffer and tombstones (no I/O).
     fn apply(&mut self, op: &WalOp) {
         match op {
-            WalOp::Add { id, text } => {
+            WalOp::Add { id, text, fields } => {
                 self.delete_everywhere(id); // upsert semantics
-                self.buffer.add(id, text);
+                for (name, v) in fields {
+                    self.field_kinds.entry(name.clone()).or_insert(v.kind());
+                }
+                self.buffer.add_with_fields(id, text, fields);
             }
             WalOp::Delete { id } => self.delete_everywhere(id),
         }

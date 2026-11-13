@@ -4,7 +4,9 @@
 //! ```text
 //! wal/wal-<first seq, 20 digits>.log    a sequence of records:
 //!   len u32 | crc32(payload) u32 | payload
-//!   payload = seq u64 | op u8 | varint len + id bytes | [varint len + text bytes]
+//!   payload = seq u64 | op u8 | varint len + id bytes
+//!             [add only: varint len + text bytes | varint num_fields |
+//!              per field: varint len + name | kind u8 (1 keyword, 2 int) | value]
 //! ```
 //!
 //! *Group commit*: [`Wal::append`] writes a whole batch of records and calls
@@ -28,12 +30,17 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use crate::codec::{read_u32, read_u64, read_varint, write_varint};
+use crate::fields::{FieldValue, Fields};
 
 /// One logged change.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WalOp {
     /// Add (or replace, if the id exists) a document.
-    Add { id: String, text: String },
+    Add {
+        id: String,
+        text: String,
+        fields: Fields,
+    },
     /// Delete a document by external id.
     Delete { id: String },
 }
@@ -45,21 +52,37 @@ fn file_name(first_seq: u64) -> String {
     format!("wal-{first_seq:020}.log")
 }
 
+fn write_str(s: &str, out: &mut Vec<u8>) {
+    write_varint(s.len() as u64, out);
+    out.extend_from_slice(s.as_bytes());
+}
+
 fn encode(seq: u64, op: &WalOp, out: &mut Vec<u8>) {
     let mut payload = Vec::new();
     payload.extend_from_slice(&seq.to_le_bytes());
     match op {
-        WalOp::Add { id, text } => {
+        WalOp::Add { id, text, fields } => {
             payload.push(OP_ADD);
-            write_varint(id.len() as u64, &mut payload);
-            payload.extend_from_slice(id.as_bytes());
-            write_varint(text.len() as u64, &mut payload);
-            payload.extend_from_slice(text.as_bytes());
+            write_str(id, &mut payload);
+            write_str(text, &mut payload);
+            write_varint(fields.len() as u64, &mut payload);
+            for (name, value) in fields {
+                write_str(name, &mut payload);
+                match value {
+                    FieldValue::Keyword(s) => {
+                        payload.push(1);
+                        write_str(s, &mut payload);
+                    }
+                    FieldValue::Int(i) => {
+                        payload.push(2);
+                        payload.extend_from_slice(&i.to_le_bytes());
+                    }
+                }
+            }
         }
         WalOp::Delete { id } => {
             payload.push(OP_DELETE);
-            write_varint(id.len() as u64, &mut payload);
-            payload.extend_from_slice(id.as_bytes());
+            write_str(id, &mut payload);
         }
     }
     out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
@@ -80,7 +103,24 @@ fn decode(payload: &[u8]) -> Result<(u64, WalOp)> {
         OP_ADD => {
             let id = read_str(&mut pos)?;
             let text = read_str(&mut pos)?;
-            WalOp::Add { id, text }
+            let n = read_varint(payload, &mut pos);
+            let mut fields = Fields::new();
+            for _ in 0..n {
+                let name = read_str(&mut pos)?;
+                let kind = payload[pos];
+                pos += 1;
+                let value = match kind {
+                    1 => FieldValue::Keyword(read_str(&mut pos)?),
+                    2 => {
+                        let v = read_u64(payload, pos) as i64;
+                        pos += 8;
+                        FieldValue::Int(v)
+                    }
+                    other => bail!("unknown field kind {other}"),
+                };
+                fields.insert(name, value);
+            }
+            WalOp::Add { id, text, fields }
         }
         OP_DELETE => WalOp::Delete {
             id: read_str(&mut pos)?,
@@ -239,6 +279,11 @@ mod tests {
         WalOp::Add {
             id: id.into(),
             text: format!("text of {id} ünïcode"),
+            fields: [
+                ("year".to_string(), FieldValue::Int(-2024)),
+                ("lang".to_string(), FieldValue::Keyword("en".into())),
+            ]
+            .into(),
         }
     }
 
@@ -250,6 +295,7 @@ mod tests {
         w.append(3, &[WalOp::Delete { id: "a".into() }]).unwrap();
         let (ops, rep) = replay(&dir, 0).unwrap();
         assert_eq!(ops.len(), 3);
+        assert_eq!(ops[0], (1, add("a"))); // fields round-trip too
         assert_eq!(ops[2], (3, WalOp::Delete { id: "a".into() }));
         assert_eq!(rep.max_seq, 3);
         // Already-committed records are skipped.

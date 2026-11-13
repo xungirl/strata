@@ -12,6 +12,7 @@ use anyhow::Result;
 use strata_core::analyzer::Analyzer;
 use strata_core::types::SegmentId;
 
+use crate::fields::Fields;
 use crate::segment::{PostingWithPositions, SegmentMeta, SegmentWriter};
 
 /// Buffered documents not yet written to a segment.
@@ -25,6 +26,7 @@ pub struct WriteBuffer {
     by_id: HashMap<String, u32>,
     /// buffer docs deleted (or replaced by a newer version) before flushing
     deleted: Vec<bool>,
+    fields: Vec<Fields>,
     tokens: Vec<String>,
 }
 
@@ -37,6 +39,7 @@ impl WriteBuffer {
             ids: Vec::new(),
             by_id: HashMap::new(),
             deleted: Vec::new(),
+            fields: Vec::new(),
             tokens: Vec::new(),
         }
     }
@@ -53,8 +56,13 @@ impl WriteBuffer {
         &self.analyzer
     }
 
-    /// Add a document; returns its buffer-local doc id.
+    /// Add a document without metadata fields.
     pub fn add(&mut self, id: &str, text: &str) -> u32 {
+        self.add_with_fields(id, text, &Fields::new())
+    }
+
+    /// Add a document; returns its buffer-local doc id.
+    pub fn add_with_fields(&mut self, id: &str, text: &str, fields: &Fields) -> u32 {
         let doc = self.doc_lens.len() as u32;
         let mut tokens = std::mem::take(&mut self.tokens);
         tokens.clear();
@@ -90,6 +98,7 @@ impl WriteBuffer {
         }
         self.ids.push(id.to_string());
         self.deleted.push(false);
+        self.fields.push(fields.clone());
         doc
     }
 
@@ -116,7 +125,7 @@ impl WriteBuffer {
         for (term, postings) in &terms {
             writer.add_term(term, postings, &self.doc_lens)?;
         }
-        let meta = writer.finish(&self.doc_lens, &self.ids)?;
+        let meta = writer.finish(&self.doc_lens, &self.ids, &self.fields)?;
         let deleted = self
             .deleted
             .iter()
@@ -128,6 +137,7 @@ impl WriteBuffer {
         self.ids.clear();
         self.by_id.clear();
         self.deleted.clear();
+        self.fields.clear();
         Ok((meta, deleted))
     }
 }

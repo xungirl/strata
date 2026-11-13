@@ -109,6 +109,20 @@ impl Snapshot {
     /// Equivalent to searching one segment holding all live documents in
     /// index order.
     pub fn search(&self, query: &Query, params: Bm25Params, k: usize) -> Vec<SnapshotHit> {
+        self.search_with(query, params, k, &|_, _| true)
+    }
+
+    /// Like [`search`](Self::search), but only docs for which
+    /// `allow(segment index, doc)` is true (in addition to not being
+    /// deleted) are returned. Used for filtered search and as the oracle for
+    /// the query engine.
+    pub fn search_with(
+        &self,
+        query: &Query,
+        params: Bm25Params,
+        k: usize,
+        allow: &dyn Fn(usize, DocId) -> bool,
+    ) -> Vec<SnapshotHit> {
         let df: HashMap<&str, u64> = query
             .terms()
             .iter()
@@ -116,8 +130,8 @@ impl Snapshot {
             .collect();
         let df_fn = |t: &str| df.get(t).copied().unwrap_or(0);
         let mut all = Vec::new();
-        for s in &self.segments {
-            let live = |d: DocId| s.live.is_live(d.0);
+        for (i, s) in self.segments.iter().enumerate() {
+            let live = |d: DocId| s.live.is_live(d.0) && allow(i, d);
             let hits = Searcher::with_stats(s.segment.as_ref(), params, self.stats)
                 .with_global_df(&df_fn)
                 .with_live_filter(&live)

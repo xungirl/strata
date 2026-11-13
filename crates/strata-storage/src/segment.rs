@@ -11,6 +11,7 @@
 //!   doclens.bin    u32 per doc (exact token count)
 //!   ids.fst        FST: external id -> doc id
 //!   ids.bin        u32 offsets (num_docs + 1) followed by the concatenated id bytes
+//!   fields.json/.bin  per-doc metadata columns (format 2+, see fields.rs)
 //! ```
 //!
 //! Postings of one term, in blocks of [`BLOCK_SIZE`] (=128) docs:
@@ -51,11 +52,12 @@ use strata_core::index::{Posting, SegmentReader};
 use strata_core::types::{DocId, SegmentId};
 
 use crate::codec::{bits_needed, pack, read_u32, read_varint, unpack, write_varint};
+use crate::fields::{write_fields, FieldColumns, Fields};
 
 /// Documents per postings block.
 pub const BLOCK_SIZE: usize = 128;
 /// On-disk format version written into `meta.json`.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 const SKIP_ENTRY_BYTES: usize = 20;
 
 /// Contents of `meta.json`.
@@ -232,8 +234,15 @@ impl SegmentWriter {
 
     /// Write per-document files and `meta.json`, then fsync everything.
     /// `ids[doc]` is the external id of `doc`; duplicates map to the last doc.
-    pub fn finish(self, doc_lens: &[u32], ids: &[String]) -> Result<SegmentMeta> {
+    /// `fields[doc]` are its metadata fields.
+    pub fn finish(
+        self,
+        doc_lens: &[u32],
+        ids: &[String],
+        fields: &[Fields],
+    ) -> Result<SegmentMeta> {
         assert_eq!(doc_lens.len(), ids.len());
+        assert_eq!(doc_lens.len(), fields.len());
         let SegmentWriter {
             dir,
             id,
@@ -289,6 +298,7 @@ impl SegmentWriter {
             ids_fst.insert(s.as_bytes(), u64::from(d))?;
         }
         ids_fst.finish()?;
+        write_fields(&dir, fields)?;
 
         let meta = SegmentMeta {
             format_version: FORMAT_VERSION,
@@ -365,6 +375,7 @@ pub struct DiskSegment {
     doc_lens: Bytes,
     ids_offsets_and_bytes: Bytes,
     ids: Map<Bytes>,
+    fields: FieldColumns,
     /// Set when the segment has been merged away; the directory is removed
     /// when the last reference (e.g. an old snapshot) is dropped.
     obsolete: AtomicBool,
@@ -391,6 +402,7 @@ impl DiskSegment {
             doc_lens: map_file(&dir.join("doclens.bin"))?,
             ids_offsets_and_bytes: map_file(&dir.join("ids.bin"))?,
             ids: Map::new(map_file(&dir.join("ids.fst"))?)?,
+            fields: FieldColumns::open(dir)?,
             dir: dir.to_path_buf(),
             meta,
             obsolete: AtomicBool::new(false),
@@ -399,6 +411,11 @@ impl DiskSegment {
 
     pub fn meta(&self) -> &SegmentMeta {
         &self.meta
+    }
+
+    /// Metadata field columns.
+    pub fn fields(&self) -> &FieldColumns {
+        &self.fields
     }
 
     pub fn dir(&self) -> &Path {
@@ -607,6 +624,37 @@ impl<'a> DiskPostings<'a> {
         }
     }
 
+    /// Skip entry of the first block at or after the current one whose
+    /// `last_doc >= target`, *without decoding it* ("shallow advance"). Used
+    /// by block-max WAND to bound scores of docs it has not reached yet.
+    pub fn block_for(&self, target: u32) -> Option<SkipEntry> {
+        let start = if self.block == usize::MAX {
+            0
+        } else {
+            self.block
+        };
+        if self.single.is_some() {
+            return (start == 0).then(|| self.skip_entry(0));
+        }
+        // last_doc is ascending across blocks: binary search.
+        let mut lo = start;
+        let mut hi = self.num_blocks;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.skip_entry(mid).last_doc < target {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo < self.num_blocks).then(|| self.skip_entry(lo))
+    }
+
+    /// All skip entries (for computing a term's overall score bound).
+    pub fn skip_entries(&self) -> impl Iterator<Item = SkipEntry> + '_ {
+        (0..self.num_blocks).map(|b| self.skip_entry(b))
+    }
+
     /// Index of the current block (valid after the first `next`/`advance_to`).
     pub fn current_block(&self) -> usize {
         self.block
@@ -662,7 +710,25 @@ impl<'a> DiskPostings<'a> {
         } else {
             self.block + 1
         };
-        let b = (start..self.num_blocks).find(|&b| self.skip_entry(b).last_doc >= target)?;
+        // Skip entries' last_doc values are ascending: binary search for the
+        // first block that can contain `target`, without decoding any block.
+        let (mut lo, mut hi) = (start, self.num_blocks);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if self.skip_entry(mid).last_doc < target {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo == self.num_blocks {
+            // Exhausted: park the cursor at the end so later calls are O(1).
+            self.block = self.num_blocks - 1;
+            self.block_len = 0;
+            self.idx = 0;
+            return None;
+        }
+        let b = lo;
         self.decode_block(b);
         // The bound matters for single-block terms, whose skip entry says
         // `last_doc = u32::MAX`: the target may lie beyond every doc.

@@ -38,6 +38,7 @@ pub fn merge_segments(
     let mut doc_maps = Vec::with_capacity(sources.len());
     let mut doc_lens = Vec::new();
     let mut ids = Vec::new();
+    let mut fields = Vec::new();
     for (seg, live) in sources {
         let mut map = Vec::with_capacity(seg.num_docs() as usize);
         for d in 0..seg.num_docs() {
@@ -45,6 +46,7 @@ pub fn merge_segments(
                 map.push(doc_lens.len() as u32);
                 doc_lens.push(seg.doc_len(DocId(d)));
                 ids.push(seg.external_id(DocId(d)).to_string());
+                fields.push(seg.fields().doc_fields(d));
             } else {
                 map.push(DELETED);
             }
@@ -82,6 +84,6 @@ pub fn merge_segments(
         }
         writer.add_term(&term, &postings, &doc_lens)?;
     }
-    let meta = writer.finish(&doc_lens, &ids)?;
+    let meta = writer.finish(&doc_lens, &ids, &fields)?;
     Ok((meta, doc_maps))
 }

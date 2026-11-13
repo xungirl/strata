@@ -5,6 +5,7 @@
 //! | module      | responsibility                                                   |
 //! |-------------|------------------------------------------------------------------|
 //! | [`codec`]   | bit packing, varints, little-endian helpers                      |
+//! | [`fields`]  | per-doc metadata columns (keyword / int) for filters          |
 //! | [`segment`] | immutable segment files: writer + mmap reader + postings cursor  |
 //! | [`buffer`]  | in-memory write buffer (with positions) flushed into segments    |
 //! | [`livedocs`]| per-segment tombstone bitsets                                    |
@@ -16,6 +17,7 @@
 
 pub mod buffer;
 pub mod codec;
+pub mod fields;
 pub mod index;
 pub mod livedocs;
 pub mod manifest;
@@ -24,6 +26,7 @@ pub mod segment;
 pub mod snapshot;
 pub mod wal;
 
-pub use index::{Index, IndexConfig, OpenReport};
+pub use fields::{FieldValue, Fields};
+pub use index::{Document, Index, IndexConfig, OpenReport};
 pub use segment::DiskSegment;
 pub use snapshot::{Snapshot, SnapshotHit};
