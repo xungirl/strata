@@ -1,0 +1,3 @@
+scipy  : t=6.145430 p=2.35431e-09 mean_diff=0.043599
+strata : t=6.145430 p=2.35431e-09 mean_diff=0.043599
+MATCH

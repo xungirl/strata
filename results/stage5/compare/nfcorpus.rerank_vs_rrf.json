@@ -1,0 +1,22 @@
+{
+  "ndcg_at_10": {
+    "mean_a": 0.36380776779574353,
+    "mean_b": 0.3524548016274972,
+    "mean_diff": -0.011352966168246489,
+    "n": 323,
+    "p_randomization": 0.0948890511094889,
+    "p_t_test": 0.09592041613123226,
+    "randomization_samples": 100000,
+    "t_stat": -1.6698520690497123
+  },
+  "recall_at_100": {
+    "mean_a": 0.3148663379613856,
+    "mean_b": 0.3148663379613856,
+    "mean_diff": 0.0,
+    "n": 323,
+    "p_randomization": 1.0,
+    "p_t_test": 1.0,
+    "randomization_samples": 100000,
+    "t_stat": 0.0
+  }
+}
