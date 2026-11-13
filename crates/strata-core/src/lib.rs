@@ -15,8 +15,10 @@
 //! | [`scoring`]  | BM25 math (IDF, term-frequency saturation, length norm)     |
 //! | [`search`]   | bag-of-words queries and exhaustive top-k retrieval         |
 
+pub mod analyzer;
 pub mod types;
 
 // Re-export the handful of types most callers need, so users can write
 // `use strata_core::{Analyzer, Searcher}` instead of long module paths.
+pub use analyzer::{Analyzer, AnalyzerConfig};
 pub use types::{DocId, SegmentId, ShardId};
