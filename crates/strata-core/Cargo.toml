@@ -1,0 +1,16 @@
+[package]
+name = "strata-core"
+description = "Analyzer, inverted index and BM25 scoring for the strata search engine"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rust-stemmers = "1.2.0"
+serde = { version = "1.0.229", features = ["derive"] }
+unicode-segmentation = "1.12.0"
+
+[dev-dependencies]
+proptest = "1.8.0"
+serde_json = "1.0.154"

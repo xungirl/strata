@@ -1,0 +1,6 @@
+/target
+/data
+*.zip
+.DS_Store
+/results/runs/
+/results/tmp/
