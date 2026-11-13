@@ -389,3 +389,161 @@ IDF 和 avgdl 依赖整个集合。如果每个段/分片用自己的统计量�
 
 **Q17. Rust 的所有权在这个项目里具体帮了什么？**
 `build(self)` 消耗 builder：编译期保证冻结后不能再加文档；`Searcher<'s, S>` 借用段：编译期保证段不会在搜索时被释放；不可变段可以放心多线程共享（第二阶段的快照隔离读者 snapshot-isolated readers）。这些在 Java/Go 里要靠约定或运行时检查。
+
+---
+
+# Stage 2：存储引擎（Storage engine）
+
+> 新 crate：`crates/strata-storage`。目标：把第一阶段的内存索引变成**持久化、可崩溃恢复、可并发读**的索引，同时保证结果和第一阶段**逐字节一致**。
+> 教学顺序：`codec.rs → segment.rs → buffer.rs → livedocs.rs → wal.rs → manifest.rs → merge.rs → index.rs → snapshot.rs → bin/strata-chaos.rs`
+
+## 全局图
+
+```
+写路径： add_documents ──► WAL append + fsync（= ack）──► 内存 WriteBuffer + tombstones
+                                                     │ commit()
+                                                     ▼
+          flush 成新 segment ─► 写 tombstone 文件 ─► 原子替换 manifest ─► 删除旧 WAL ─► 发布新 Snapshot
+                                                     │ 后台线程
+                                                     ▼
+                                      相邻同级 segment 合并（丢掉已删除文档）
+读路径： index.snapshot() ──► Arc<Snapshot>（不可变的 segment 列表 + tombstones）──► 全局统计量打分
+恢复：   open() ─► 读 manifest ─► 打开 segment ─► 清理孤儿文件 ─► 重放 committed_seq 之后的 WAL
+```
+
+## 1. `codec.rs` —— 整数压缩
+
+**(a) 骨架**：`bits_needed`、`pack/unpack`（定宽位打包 bit packing）、`write_varint/read_varint`（LEB128 变长整数）、小端读取辅助函数。
+**(b) 为什么**：倒排表存的是**差值**（delta / gap：`[3,7,8,20] → [3,4,1,12]`），差值小，所以用最大值所需的位数打包，常常 4–8 位就够，而不是 32 位。位置信息（positions）数值分布很散，用 varint。这是 Lucene（PackedInts + VInt）、Tantivy（128 一块的 bitpacking）的经典做法。我们的实现是标量（一次一个值），没做 SIMD 解码（这是以后的优化点）。
+**(c) 语法**：`u64` 当作位缓冲区 `acc`，`acc |= v << acc_bits` 往上塞，`out.push(acc as u8)` 从下面取字节；`div_ceil` 向上取整；`u32::from_le_bytes(slice.try_into().expect(..))` —— `try_into` 把 `&[u8]` 转成定长数组 `[u8; 4]`，长度不对就返回错误。测试里用了 proptest 做往返（roundtrip）测试。
+
+## 2. `segment.rs` —— 不可变的磁盘段
+
+**(a) 骨架**：一个 segment 是一个目录，写一次永不修改：
+```
+terms.fst      词 → postings.bin 里的字节偏移（FST，有限状态转换器）
+postings.bin   每个词：头(df, positions 偏移, 块数) + 跳表(skip table) + 128 文档一块的位打包块
+positions.bin  每个 posting 的位置（varint 差值）
+doclens.bin    每篇文档长度 u32
+ids.fst/ids.bin  外部 id ↔ 文档号
+meta.json      格式版本、计数、分析器配置
+```
+- `SegmentWriter`：按词典序 `add_term`，最后 `finish` 写文档级文件并 fsync 所有文件和目录。
+- `DiskSegment`：mmap 打开，实现第一阶段的 `SegmentReader` trait。
+- `DiskPostings`：块解码游标；`next`、`advance_to(target)`（用跳表二分跳块）、`positions()`、`block_for(target)`（不解码，只看跳表的「浅前进」shallow advance）。
+
+**(b) 为什么**
+- **为什么不可变？** 写一次、只读多次：并发读不需要锁；崩溃时不会有「改了一半」的文件；缓存友好。代价是删除只能打标记（tombstone），更新 = 删除 + 新增，靠合并回收空间。这就是 Lucene/Tantivy 的 segment 架构，也是 LSM-tree 的思想。
+- **为什么 FST？** 词典是有序字符串集合，FST 共享前缀**和后缀**，比哈希表小得多，还支持前缀/范围遍历（第三阶段的 prefix query 就靠它）。值存的是 postings 偏移（递增），FST 压缩得也很好。
+- **跳表里存 `max_tf` 和 `min_doc_len`**：BM25 随 tf 增大、随文档长度增大而减小，所以 `score(max_tf, min_doc_len)` 是这个块里任何文档该词得分的**上界**，而且和集合统计量无关（合并后依然成立）。这是给第三阶段 block-max WAND 准备的。
+- **单块的词不写跳表**：大部分词很稀有（只有一个块），省掉 20 字节跳表项。这个优化是看了文件大小才做的：最初 scifact 的 postings.bin 里一半是跳表/词信息开销。改完后 advance_to 的 proptest 立刻抓到一个 bug（单块词的 last_doc 未知，扫描必须设上界）。
+- **mmap 的取舍**：由操作系统按需分页、自动缓存，冷段不占内存；`unsafe` 只有一处（`map_file`），SAFETY 注释写明了前提：段文件写完 fsync 后永不修改或截断。代价：I/O 错误会变成 SIGBUS 而不是 `Result`；也没法控制缓存淘汰。
+
+**(c) 语法**
+- `pub enum Bytes { Mapped(Mmap), Owned(Vec<u8>) }` + `impl Deref for Bytes` —— 两种来源统一成 `&[u8]` 用（空文件在有的系统上不能 mmap）。
+- `unsafe { Mmap::map(&file) }` —— `unsafe` 块：编译器无法验证的前提由程序员保证，配一段 `// SAFETY:` 注释是 Rust 社区的惯例。
+- `impl Drop for DiskSegment` —— 析构：如果被标记 `obsolete`（被合并掉了），最后一个引用释放时删除目录。`AtomicBool` 保证跨线程可见。
+- `struct DiskPostings<'a> { blocks: &'a [u8], ... }` —— 游标借用 mmap 的字节，生命周期 `'a` 保证游标不能比 segment 活得久。
+- `impl Iterator for DiskPostings<'_>` —— 实现标准迭代器，所以第一阶段的泛型 `Searcher` 能直接用在磁盘段上（零改动复用）。
+
+## 3. `buffer.rs` —— 写缓冲
+
+**(a) 骨架**：`WriteBuffer`：`HashMap<term, Vec<PostingWithPositions>>`、doc_lens、ids、`by_id`（id → 缓冲区内最新的文档）、`deleted`。`flush` 排序后交给 `SegmentWriter`，返回本段里需要立刻打 tombstone 的文档号。
+**(b) 为什么**：类似 Lucene 的 RAM buffer。位置（position）是去停用词**之后**的下标（没有空位），和 Lucene 保留空位不同——文档写明了这个差异。缓冲区里被删除/被替换的文档仍然写进段里再打标记，这样段内文档号严格等于插入顺序，排序的平局规则（tie-break）和第一阶段一致。
+**(c) 语法**：`by_term.chunk_by(|a, b| a.0 == b.0)` 分组；`if let Some(old) = self.by_id.insert(..)` —— `HashMap::insert` 返回旧值，正好用来实现 upsert。
+
+## 4. `livedocs.rs` —— 删除标记（tombstones）
+
+**(a) 骨架**：每个段一个位图（1 = 已删除），带 CRC32 校验的文件格式。
+**(b) 为什么**：段不可变，删除只能记在旁边。和 Lucene 一样，已删除但未合并的文档**仍然计入 N 和 df**（打分统计量），合并后才消失——这一点在测试里专门验证了（不合并 vs 全部合并两种 oracle）。
+**(c) 语法**：`#[derive(Clone, PartialEq, Eq)]`；`Arc::make_mut(&mut s.live).delete(doc)`（在 index.rs 里）—— **写时复制**（copy-on-write）：如果这个 `Arc` 只有我一个持有者就原地改，否则先克隆一份再改，旧快照手里的那份不受影响。快照隔离就靠这一行。
+
+## 5. `wal.rs` —— 预写日志（write-ahead log）
+
+**(a) 骨架**：记录格式 `len | crc32 | payload(seq, op, id, text)`；`Wal::append(first_seq, ops)` 写一批再 `sync_data` 一次；`replay(dir, committed_seq)` 返回需要重放的操作；`remove_obsolete`。
+**(b) 为什么**
+- **先写日志再改内存，fsync 返回后才 ack**：崩溃后能丢的只有没 ack 的东西。
+- **组提交（group commit）**：一次 fsync 覆盖一批记录，fsync 是最贵的操作（BENCHMARK 里有 batch=1/10/100/1000 的吞吐对比）。
+- **撕裂写（torn write）**：崩溃可能留下半条记录。只有**最后一个文件的尾部**可能撕裂（只有它在被追加），所以那里长度不够/CRC 不对就截断；更早文件里的 CRC 错误不可能是撕裂写，报错而不是静默丢数据。
+- 序号必须连续（`seq gap` 报错），防止中间丢记录。
+**(c) 语法**：`OpenOptions::new().create(true).append(true).open(..)`；`file.sync_data()`（只刷数据和必要的元数据）；`File::open(dir)?.sync_all()` —— 对**目录**做 fsync，让新文件的目录项也持久化（POSIX 上新建文件后必须这样做，很多实现会漏）。
+
+## 6. `manifest.rs` —— 提交点
+
+**(a) 骨架**：`manifest.json` 记录 generation、`committed_seq`、段列表（id、文档数、tombstone 代数）。`store`：写临时文件 → fsync → `rename` → fsync 目录。
+**(b) 为什么**：`rename` 在 POSIX 上是原子的，崩溃后 manifest 要么是旧的要么是新的，不会半新半旧。manifest 没引用的文件都是垃圾（崩溃时写了一半的段），打开时清理。`committed_seq` 把 manifest 和 WAL 连起来：≤ 它的操作已经在段里了，> 它的要重放。
+
+## 7. `merge.rs` —— 段合并
+
+**(a) 骨架**：`merge_segments(sources, ..)`：先给存活文档重新编号（逐段、按顺序），再用 FST 的 `OpBuilder::union()` 按词典序流式合并所有段的词典，每个词把各段的 postings 拼起来（文档号重映射，跳过已删除），写出新段。
+**(b) 为什么**
+- 段太多 → 每次查询要查很多个词典；删除的文档永远占空间。合并 = LSM 的 compaction。
+- **只合并相邻的段**（类似 Lucene 的 LogMergePolicy，按大小分层 tier = ⌊log_factor(存活文档数)⌋）：保持存活文档的相对顺序不变，所以平局规则、因而结果，和不合并完全一样。TieredMergePolicy 允许不相邻合并，能更好地选「最划算」的合并，但会改变文档顺序。
+- 合并期间不持有写锁（写入、提交可以继续）；合并完成时在锁内把「合并期间新发生的删除」搬到新段上（对比开始时的 tombstone 快照和现在的）。
+**(c) 语法**：`fst::Streamer` 是「借出型迭代器」（lending iterator）：每个元素借用流本身，所以只能 `while let Some(..) = stream.next()`，不能用 `for`。
+
+## 8. `index.rs` —— 写入器、提交、恢复、合并调度
+
+**(a) 骨架**：`Index { state: Mutex<WriterState>, snapshot: RwLock<Arc<Snapshot>>, merge_lock, merge_thread }`。
+- `open`：建目录 → 读/建 manifest → 打开段和 tombstone → 清理孤儿 → 重放 WAL。
+- `add_documents / delete`：在锁内 WAL append+fsync，然后应用到缓冲区和 tombstone（upsert = 先在所有地方删掉同 id 再加）。
+- `commit`：flush → 写脏 tombstone → 写 manifest → 新 WAL 文件、删旧的 → 发布快照 → 触发合并。
+- `merge_once`：锁内挑选 → 锁外合并 → 锁内替换并搬运删除。
+**(b) 为什么**
+- **快照 = `Arc`**：读者拿到 `Arc<Snapshot>` 后，写者再怎么提交/合并都不影响它（快照隔离 snapshot isolation，读不加锁）。被合并掉的段在**最后一个快照释放时**才删文件（引用计数）。测试 `snapshots_are_isolated_from_later_writes_and_merges` 验证了：旧快照仍能看到 4 个段、被删的文档，目录还在；drop 之后目录消失。
+- **一个 bug 的故事**：最初提交时会「清理 manifest 没引用的段目录」，结果把旧快照还在用的段（以及正在合并的输出）删了。修复：运行期间段目录只由 `Drop` 删除，孤儿清理只在 `open` 时做（那时不可能有快照）。
+- **一个语义 bug**：`force_merge` 只有一个段时什么都不做，导致这个段里删除的文档还在统计量里。修复：单段有删除时也重写（expunge deletes）。
+- 限制：没有文件锁防止两个进程同时写同一个目录（文档里写明了）。
+
+**(c) 语法**
+- `pub fn commit(self: &Arc<Self>)` —— 方法接收者可以是 `self: &Arc<Self>`，这样方法里能 `Arc::clone(self)` 交给后台线程。
+- `std::thread::spawn(move || loop { .. })` —— `move` 闭包把 `Arc<Index>` 的所有权移进线程。
+- `self.state.lock().unwrap()` —— `Mutex::lock` 返回 `Result`（如果持锁线程 panic 了锁会「中毒」poisoned）；返回的守卫（guard）离开作用域自动解锁（RAII）。我们刻意用 `{ ... }` 块控制锁的范围，避免持锁调用 `commit`。
+- `st.segments.splice(range, [new])` —— 把一段元素替换成新元素，返回被替换的。
+
+## 9. `snapshot.rs` —— 多段搜索
+
+**(a) 骨架**：`Snapshot { segments: Vec<SnapshotSegment{segment, live, base}>, stats }`；`search` / `search_with`：每段用**全局** N、avgdl、df 打分（第一阶段留的 `with_stats` / `with_global_df` 口子），段内结果换成全局文档号（`base + doc`）再统一 top-k。
+**(b) 为什么**：多段时如果每段用自己的 IDF，同一篇文档放在不同段里分数不同，排序就错了。用全局统计量 + 全局文档号做平局规则 → 和一个大段完全一样。BEIR 上验证：磁盘引擎（多段、合并后单段）的 run 文件和第一阶段**逐字节相同**。
+
+## 10. `bin/strata-chaos.rs` —— kill -9 混沌测试
+
+**(a) 骨架**：父进程循环：启动子进程（打开索引=恢复，然后不停写：批量新增、偶尔删除、定期提交、后台合并；每次 fsync 成功后在 stdout 打印 `ACK`）→ 随机延迟后 `SIGKILL` → 父进程自己打开索引恢复 → 检查每个被 ack 的新增都能找到、每个被 ack 的删除都找不到。
+**(b) 为什么**
+- 只在 fsync 之后 ack，所以**丢失的 ack 数必须是 0**。
+- 删除操作先打印 `TRY DEL`：如果在 fsync 之后、ack 之前被杀，删除可能生效也可能没生效，两种都对，所以这个 id 不再参与检查——否则测试会误报。
+- **负对照（negative control）**：`--broken-ack-before-write` 让子进程先 ack 再写。测试必须报出丢失——证明这个测试**有能力**发现 bug，而不是「永远绿」。
+- 局限（写在文档里）：kill -9 只模拟进程崩溃，操作系统页缓存还在，所以**不覆盖断电**；也不覆盖磁盘满、位翻转。
+**(c) 语法**：`Command::new(exe).args([...]).stdout(Stdio::piped()).spawn()`；`child.kill()` 在 Unix 上发 SIGKILL；读 stdout 放在单独线程，`BufReader::lines().map_while(Result::ok)`。
+
+## Stage 2 面试问答
+
+**Q1. 为什么段要设计成不可变的？代价是什么？**
+不可变 → 读无锁、崩溃不会留下改了一半的文件、可以 mmap 和放心缓存、合并可以后台进行。代价：删除只能打 tombstone；更新 = 删除+新增；需要合并回收空间、控制段数（写放大 write amplification）。
+
+**Q2. 一次写入从调用到可见经历了什么？什么时候算持久化？**
+`add_documents` → 编码 WAL 记录 → `write` + `sync_data`（**此刻持久化，返回即 ack**）→ 应用到内存缓冲。**可见**要等 `commit`（或自动 flush）：写段、写 tombstone、原子替换 manifest、发布新快照。持久化和可见是两回事（Lucene 里也是 commit vs refresh）。
+
+**Q3. 崩溃恢复怎么做？怎么保证不重复也不遗漏？**
+manifest 记录 `committed_seq`；打开时只重放 WAL 里 seq 更大的记录。新增是 upsert（先删同 id）、删除是幂等的，所以重放一次和执行一次效果一样。提交的原子点是 manifest 的 rename：之前崩溃 → 用旧 manifest + 完整 WAL；之后崩溃 → 新 manifest + 剩下的 WAL。
+
+**Q4. 什么是撕裂写？你怎么处理？**
+一次 `write` 只写进去一部分就崩溃，日志尾部留下半条记录。用长度 + CRC 判断，只允许最后一个文件的尾部这样，截断即可——那条记录从没被 ack 过。中间文件的 CRC 错误当作损坏报错。
+
+**Q5. 为什么要 fsync 目录？**
+新建文件（新段、新 WAL、rename 后的 manifest）的**目录项**也要持久化，否则崩溃后文件内容在，但目录里找不到它。POSIX 上要对目录 fd 调用 fsync。
+
+**Q6. 快照隔离是怎么实现的？旧快照引用的段被合并了怎么办？**
+快照是 `Arc<Snapshot>`，里面是 `Arc<DiskSegment>` 和 `Arc<LiveDocs>`。删除用 `Arc::make_mut` 写时复制，新快照才看到。被合并的段只标记 `obsolete`，最后一个 `Arc` 释放时 `Drop` 删目录；Unix 上即使文件被 unlink，已 mmap 的页仍然有效。
+
+**Q7. 多段打分为什么必须用全局统计量？删除的文档算不算？**
+IDF、avgdl 依赖整个集合；按段算会让同一文档得分随所在段变化。我们和 Lucene 一样把未合并的删除文档算进 N 和 df（准确去除需要扫描，代价大），合并后才消失。测试里两种情况都对照了 oracle。
+
+**Q8. 合并策略是什么？为什么只合并相邻段？**
+按存活文档数分层（tier = ⌊log_4 n⌋），相邻 4 个同层就合并（类似 LogMergePolicy）。相邻 → 存活文档顺序不变 → 平局规则不变 → 结果和不合并时逐字节一致。代价：没有 TieredMergePolicy 那么灵活（比如优先合并删除比例高的段）。
+
+**Q9. 你的混沌测试证明了什么，没证明什么？**
+证明：在真实 SIGKILL 下（包括恰好在刷段、合并、写 WAL 时），所有 ack 过的写入和删除都没有丢、删除的没有复活（具体次数见 BENCHMARK）。负对照证明测试能抓到「先 ack 后写」的 bug。没证明：断电/内核崩溃（页缓存丢失）、磁盘满、静默数据损坏。要测断电需要虚拟机或 dm-flakey 这类故障注入。
+
+**Q10. 压缩后的索引为什么查询比内存版慢？**
+磁盘段要做位解包 + 差值还原（每块 128 个），内存版直接读 8 字节的 `Posting`。BENCHMARK 里磁盘引擎 TAAT 的延迟比内存版高（同一次运行里测的），换来的是索引体积小很多、可以持久化、不需要启动时重建。第三阶段的剪枝（MaxScore/BMW）就是为了少解码、少打分。

@@ -193,3 +193,100 @@ Index shape:
 - The frozen segment holds 9.3–10.7 bytes per posting (8 bytes per `Posting` plus the term dictionary, offsets, doc lengths and external ids). That comes to 0.64–0.78× the raw corpus text size.
 - The capacity-based estimate (`InMemorySegment::heap_size_bytes`) equals the allocator-measured live bytes exactly on all 5 datasets.
 - The mutable builder (`HashMap` + per-term `Vec`s with growth slack) is 1.4–1.8× the frozen segment. Peak memory during `build()` (builder and segment alive at once) was not measured.
+
+
+---
+
+# Stage 2: storage engine
+
+Measured by `scripts/run_stage2.sh` (load-average gated, see `results/stage2/load.log`). Same machine as stage 1, 2026-11-13 UTC. The fiqa and scidocs rows come from a re-run (`SKIP_EXTRA=1 scripts/run_stage2.sh fiqa scidocs`). The first attempt overlapped with a `nice -n 19` compile and was set aside in `results/stage2/superseded/` (kept for transparency). Raw outputs: `results/stage2/` (`summary.tsv`, `logs/`, per-run JSON with per-repeat timings and the 1-minute load average before each repeat, `parity/`, `chaos*.json`).
+
+```
+date: 2026-11-13T08:10:28Z
+git: 3ff278a (dirty)
+rustc: rustc 1.94.0 (4a4ef493e 2026-03-02)
+uptime:  0:10  up 65 days, 10 mins, 3 users, load averages: 3.08 3.60 5.36
+```
+
+Engine settings: flush a segment every 10,000 docs; merge 4 adjacent segments of the same size tier (tier = floor(log4 live docs)) on a background thread; ingest in batches of 1,000 docs per `add_documents` call (one WAL fsync each); BM25 k1=0.9, b=0.4, exact lengths, Porter; exhaustive TAAT with index-wide statistics (stage 1 algorithm, unchanged). "disk, 1 seg" adds `--force-merge`. Tantivy rows: `strata-bench tantivy --positions` (strata's analyzer, positions indexed, 1 indexing thread, RAM directory, merged to 1 segment; its queries use Tantivy's block-max WAND).
+
+### Parity with the stage-1 in-memory index
+
+| dataset | disk, multi-segment (flush 10k, merge factor 4) | disk, force-merged to 1 segment |
+|---|---|---|
+| scifact | byte-identical (1 segments) | byte-identical (1 segments) |
+| nfcorpus | byte-identical (1 segments) | byte-identical (1 segments) |
+| fiqa | byte-identical (3 segments) | byte-identical (1 segments) |
+| scidocs | byte-identical (3 segments) | byte-identical (1 segments) |
+| trec-covid | byte-identical (3 segments) | byte-identical (1 segments) |
+
+### Index size
+
+| dataset | postings | in-memory heap (stage 1) | disk segment files (1 segment, with positions) | Tantivy, with positions | Tantivy, no positions (stage 1) | strata disk / Tantivy pos |
+|---|---|---|---|---|---|---|
+| scifact | 510,930 | 5.5 MB (10.70 B/posting) | 2.3 MB (4.50 B/posting) | 2.2 MB (4.35 B/posting) | 1.2 MB (2.36 B/posting) | 1.03x |
+| nfcorpus | 390,712 | 4.1 MB (10.54 B/posting) | 1.7 MB (4.41 B/posting) | 1.7 MB (4.33 B/posting) | 0.9 MB (2.34 B/posting) | 1.02x |
+| fiqa | 3,700,517 | 34.5 MB (9.31 B/posting) | 13.7 MB (3.71 B/posting) | 13.4 MB (3.61 B/posting) | 6.9 MB (1.88 B/posting) | 1.03x |
+| scidocs | 2,107,133 | 21.3 MB (10.09 B/posting) | 10.2 MB (4.84 B/posting) | 8.2 MB (3.89 B/posting) | 4.2 MB (1.99 B/posting) | 1.24x |
+| trec-covid | 13,243,081 | 122.6 MB (9.26 B/posting) | 53.8 MB (4.06 B/posting) | 48.6 MB (3.67 B/posting) | 24.4 MB (1.85 B/posting) | 1.11x |
+
+### Ingest throughput, docs/s (single writer thread, mean ± std of 3 builds)
+
+| dataset | in-memory (no durability) | disk: WAL fsync per 1000 docs + flush/merge | disk + force-merge | Tantivy (positions, 1 thread, RAM dir) |
+|---|---|---|---|---|
+| scifact | 14483 ± 3938 | 12182 ± 64 | 12070 ± 386 | 15209 ± 1262 |
+| nfcorpus | 15538 ± 911 | 10635 ± 748 | 10991 ± 241 | 14245 ± 283 |
+| fiqa | 31872 ± 1719 | 22164 ± 427 | 18848 ± 2531 | 29950 ± 262 |
+| scidocs | 20943 ± 391 | 15250 ± 244 | 13064 ± 962 | 18262 ± 1994 |
+| trec-covid | 21444 ± 538 | 14490 ± 208 | 13593 ± 1022 | 18788 ± 1633 |
+
+### Query latency, exhaustive TAAT, single thread, same session (µs; mean ± std of 3 passes)
+
+| dataset | engine | p50 k=1000 | p99 k=1000 | p50 k=10 | p99 k=10 | load avg (1 min) per repeat |
+|---|---|---|---|---|---|---|
+| scifact | in-memory | 155 ± 16 | 589 ± 658 | 31 ± 3 | 82 ± 29 | 5.2, 5.2, 5.2 |
+| scifact | disk, multi-seg | 205 ± 2 | 298 ± 12 | 44 ± 0 | 105 ± 2 | 3.4, 3.6, 3.6 |
+| scifact | disk, 1 seg | 208 ± 2 | 299 ± 18 | 44 ± 1 | 101 ± 1 | 3.6, 3.6, 3.6 |
+| scifact | Tantivy pos (BMW) | 285 ± 32 | 956 ± 293 | 84 ± 15 | 433 ± 198 | n/a |
+| nfcorpus | in-memory | 16 ± 1 | 145 ± 12 | 4 ± 0 | 28 ± 4 | 3.7, 3.7, 3.7 |
+| nfcorpus | disk, multi-seg | 24 ± 1 | 196 ± 4 | 6 ± 0 | 40 ± 1 | 3.7, 3.7, 3.7 |
+| nfcorpus | disk, 1 seg | 24 ± 1 | 192 ± 1 | 6 ± 0 | 41 ± 1 | 3.9, 3.9, 3.9 |
+| nfcorpus | Tantivy pos (BMW) | 20 ± 1 | 223 ± 4 | 9 ± 0 | 68 ± 1 | n/a |
+| fiqa | in-memory | 473 ± 19 | 1006 ± 205 | 252 ± 10 | 799 ± 372 | 3.5, 3.5, 3.8 |
+| fiqa | disk, multi-seg | 920 ± 2 | 1584 ± 13 | 403 ± 7 | 1005 ± 22 | 3.8, 3.9, 3.7 |
+| fiqa | disk, 1 seg | 712 ± 68 | 1810 ± 605 | 433 ± 38 | 1319 ± 324 | 3.6, 3.6, 3.6 |
+| fiqa | Tantivy pos (BMW) | 1205 ± 15 | 3737 ± 142 | 467 ± 6 | 2232 ± 26 | n/a |
+| scidocs | in-memory | 259 ± 2 | 697 ± 369 | 80 ± 1 | 230 ± 6 | 3.2, 3.2, 3.1 |
+| scidocs | disk, multi-seg | 611 ± 6 | 1007 ± 34 | 146 ± 1 | 424 ± 10 | 3.1, 3.5, 3.4 |
+| scidocs | disk, 1 seg | 360 ± 6 | 666 ± 23 | 139 ± 3 | 395 ± 17 | 3.2, 3.2, 3.0 |
+| scidocs | Tantivy pos (BMW) | 577 ± 14 | 1485 ± 45 | 167 ± 8 | 657 ± 45 | n/a |
+| trec-covid | in-memory | 1071 ± 48 | 1947 ± 14 | 732 ± 31 | 1497 ± 53 | 3.7, 3.8, 3.9 |
+| trec-covid | disk, multi-seg | 1998 ± 5 | 3871 ± 39 | 1337 ± 19 | 3023 ± 123 | 4.0, 4.5, 4.9 |
+| trec-covid | disk, 1 seg | 1776 ± 176 | 3607 ± 174 | 1338 ± 80 | 3311 ± 120 | 3.5, 3.6, 4.3 |
+| trec-covid | Tantivy pos (BMW) | 3224 ± 626 | 14211 ± 3180 | 1177 ± 234 | 7523 ± 782 | n/a |
+
+### WAL group commit: ingest throughput vs docs per fsync (scifact, 5,183 docs)
+
+| docs per `add_documents` (= per fsync) | fsyncs | docs/s (mean ± std, 3 builds) |
+|---|---|---|
+| 1 | 5,183 | 224 ± 9 |
+| 10 | 519 | 1726 ± 98 |
+| 100 | 52 | 8276 ± 277 |
+| 1000 | 6 | 12224 ± 109 |
+
+### Crash consistency (kill -9)
+
+| run | kills | acked adds | acked deletes | lost acked adds | resurrected deletes | recovery p50 / max |
+|---|---|---|---|---|---|---|
+| strata (correct acks) | 100 | 113,480 | 2,639 | 0 | 0 | 23.4 / 62.3 ms |
+| negative control: ack before write | 30 | 7,961 | 186 | 147 | 0 | 11.9 / 25.4 ms |
+
+## Reading the numbers
+
+- **Parity.** The on-disk engine returns *byte-identical* TREC run files to the stage-1 in-memory index on all 5 datasets: same documents, ranks and f32 scores, both with 3 segments (fiqa, scidocs, trec-covid; scifact and nfcorpus have fewer than 10k docs, so they flush only once) and after merging to 1 segment. That covers compressed postings, the multi-segment scoring with index-wide N/avgdl/df, global doc-id tie-breaking, and merges preserving document order.
+- **Size.** Bit-packed postings with positions shrink the index 2.1-2.5x versus stage 1's uncompressed in-memory layout (which had *no* positions), to 3.7-4.8 bytes per posting. That is within 1.02-1.24x of Tantivy 0.27 indexing the same terms *with* positions. Tantivy's file total also includes its doc store and an `ord` fast field, so the comparison is approximate. scidocs is the largest gap (1.24x). Its per-term overhead (header varints, FST) weighs more because the vocabulary is large relative to the postings, but this was not investigated further.
+- **Ingest.** Durability costs 16-32% throughput versus the in-memory builder (e.g. trec-covid 21,444 → 14,490 docs/s; the low end is scifact, whose in-memory figure is noisy at ±3,938). The cost covers positions, the WAL write+fsync per 1,000 docs, segment writes with fsync, and background merges. Tantivy indexes faster than strata's disk path on all 5 datasets (e.g. trec-covid 18,788 vs 14,490 docs/s).
+- **fsync dominates small batches.** With one document per WAL fsync, scifact ingests 224 docs/s, i.e. about 4.5 ms per fsync on this SSD. Batching 1,000 docs per fsync reaches 12,224 docs/s (54x). That is the reason for group commit.
+- **Query latency.** The disk engine is slower than the in-memory one at k=10 by 1.4-1.8x (decode + mmap instead of reading 8-byte structs), e.g. trec-covid p50 1,338 vs 732 µs. Multiple segments cost extra at k=1000 because each segment selects its own top 1001 before the merge (scidocs p50 611 vs 360 µs). Against Tantivy (block-max WAND), strata's exhaustive TAAT has lower p50 on 4/5 datasets at k=10 and lower p99 everywhere, but higher p50 on trec-covid at k=10 (1,338 vs 1,177 µs). Same caveats as stage 1 apply: small corpora, Tantivy not profiled.
+- **Crash consistency.** Over 100 real `SIGKILL`s at random points (during WAL appends, flushes, background merges and recovery itself), 113,480 acknowledged adds and 2,639 acknowledged deletes were all intact after recovery: **0 lost, 0 resurrected**. Recovery (open + WAL replay) took p50 23.4 ms, max 62.3 ms. The negative control (acknowledge *before* writing) is detected: 147 lost acks in 30 kills. The test cannot see power loss or OS crashes (the page cache survives a process kill), disk-full, or bit rot. None of the 100 kills produced a torn WAL tail. Torn-tail handling is covered by unit tests (`wal::tests::torn_tail_is_truncated`), not by this run.
+- Tests: 67 tests, 10/10 consecutive green runs (`results/stage2/test_10x.txt`).

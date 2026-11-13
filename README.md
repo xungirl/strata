@@ -2,9 +2,9 @@
 
 **A hybrid (lexical + vector) search database written in Rust, built from scratch, one stage at a time.**
 
-strata is inspired by Lucene/Tantivy (segment architecture, inverted index, block-max WAND) and Qdrant (HNSW), but the engine is our own code: Tantivy shows up only as a comparison baseline in a separate bench crate. The project is built **incrementally over 10 stages**. This README describes where it stands now (**stage 1: foundation**), and every number in it was measured on one machine; see [BENCHMARK.md](BENCHMARK.md).
+strata is inspired by Lucene/Tantivy (segment architecture, inverted index, block-max WAND) and Qdrant (HNSW), but the engine is our own code: Tantivy shows up only as a comparison baseline in a separate bench crate. The project is built **incrementally over 10 stages**. Every number in this README was measured on one machine; see [BENCHMARK.md](BENCHMARK.md).
 
-> Status: stage 1 of 10 is done. There's an analyzer, an in-memory inverted index, BM25 with exhaustive top-k, a BEIR evaluation harness cross-checked against `pytrec_eval`, and a Tantivy baseline. Nothing is persisted to disk yet and there are no vectors yet. Those come in stages 2 and 4.
+> Status: stages 1-2 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, and a durable storage engine: WAL, compressed mmap segments, merges, deletes and snapshot readers, all verified against the stage-1 in-memory index and a kill -9 chaos test. There's no pruning (WAND) yet and no vectors yet. Those come in stages 3 and 4.
 
 ---
 
@@ -48,7 +48,41 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 4. *Allocating in the possessive filter.* The first version built a `String` per suffix check for every token. Replaced it with a zero-allocation `char_indices` check.
 5. *Running Lucene locally for a token-level diff was not possible in this environment*, so the remaining nfcorpus/trec-covid gap is **not fully explained**. See Limitations.
 
-### Key metrics (stage 1)
+### Stage 2: Storage engine (done)
+
+**Goal.** Make the index durable and concurrent: immutable on-disk segments, a write-ahead log with crash recovery, background merges, deletes, and readers that see a consistent snapshot. Results must not change at all: the stage-1 in-memory index is the oracle.
+
+**Decisions and alternatives considered.**
+
+| decision | chosen | alternatives | why |
+|---|---|---|---|
+| segment files | one directory per segment, written once, fsynced, never modified; read via `mmap` | mutable B-tree / LSM memtable files; read with `pread` | immutability = lock-free readers and no half-modified files after a crash; mmap lets the OS cache pages (one `unsafe` call, documented) |
+| term dictionary | `fst` crate: term → byte offset of its postings | sorted array + binary search; hash map | compact (shared prefixes and suffixes), ordered (prefix/range queries in stage 3), value = offset so no separate term-info file |
+| postings | blocks of 128 docs: bit-packed doc gaps and tf-1; skip table with `last_doc`, `max_tf`, `min_doc_len` per block; positions as varints | varint everything; PForDelta; Roaring | bit packing is simple and fast to decode; the per-block `(max_tf, min_doc_len)` is a BM25 upper bound that needs no collection stats (feeds block-max WAND) |
+| durability | WAL with CRC per record, group commit (one fsync per batch), ack only after fsync; commit = new segment + tombstones + atomic manifest rename + fsync of files *and directories* | fsync per op; no WAL (commit-only durability) | group commit amortizes the ~4.5 ms fsync of this SSD (measured); manifest rename is the single atomic commit point |
+| deletes / updates | per-segment tombstone bitsets; upsert = delete + add; deleted docs keep counting in N/df until merged (Lucene semantics) | rewrite segments; exact live statistics | segments stay immutable; exact live df would need a scan per query |
+| merges | adjacent segments of the same size tier (floor(log4 live docs)), 4 at a time, background thread, deletes that happen during a merge carried over | Lucene TieredMergePolicy (non-adjacent) | adjacency keeps document order, so tie-breaking and therefore results stay byte-identical |
+| readers | `Arc<Snapshot>`; tombstones copy-on-write (`Arc::make_mut`); obsolete segments deleted when the last snapshot drops them | reader locks; epoch-based reclamation | simplest correct snapshot isolation in Rust: reference counting |
+| scoring across segments | index-wide N, avgdl, df; global doc ids (segment base + doc) for tie-breaks | per-segment statistics | a document's score must not depend on which segment holds it |
+
+**Built.** New crate `strata-storage`: `codec` (bit packing, varints), `segment` (writer, mmap reader, block cursor with `advance_to` / positions / shallow block lookup), `buffer` (write buffer with positions), `livedocs`, `wal`, `manifest`, `merge`, `index` (writer, commit, recovery, background merges), `snapshot` (multi-segment BM25). `strata-chaos` binary (kill -9 harness). `strata-eval run --engine disk`. `strata-bench tantivy --positions`. `scripts/run_stage2.sh` with load-average gating.
+
+**Verified.**
+- Proptests: segment files round-trip exactly against the in-memory index (postings, tf, lengths, ids, positions); `advance_to` equals a linear scan; a multi-segment index with random flushes, merges and deletes scores **bit-identically** to the in-memory oracle (deleted docs counted as in Lucene before merging, and excluded after a full merge).
+- Unit tests: WAL torn tail truncated, corruption in an older WAL file rejected, tombstone checksum, snapshot isolation (an old snapshot still sees 4 segments and deleted docs after a merge; its directory disappears when it is dropped), orphan cleanup, recovery.
+- BEIR: run files of the disk engine (3 segments, and force-merged) are **byte-identical** to stage 1 on all 5 datasets.
+- Chaos: 100 random SIGKILLs during writes, flushes and merges. 113,480 acked adds + 2,639 acked deletes, **0 lost, 0 resurrected**. The negative control (ack before write) is caught (147 lost).
+
+**Measured** (BENCHMARK.md, stage 2): index 3.7-4.8 B/posting with positions, within 1.02-1.24x of Tantivy with positions. Ingest 10.6k-22.2k docs/s with fsync per 1,000 docs; 224 docs/s with fsync per doc. The disk engine's exhaustive queries are 1.4-1.8x slower than in-memory at k=10. Recovery p50 23 ms.
+
+**Problems hit and fixes.**
+1. *Skip tables dominated small terms.* Half of scifact's postings file was per-term overhead (20 B skip entry + 20 B term info for terms with a single block). Moved term info inline (FST value = postings offset) and dropped skip tables for single-block terms. The existing `advance_to` proptest immediately caught the resulting bug: a single-block cursor's "last doc" is unknown, so the scan must be bounded.
+2. *Orphan GC deleted live data.* Commit-time cleanup of "unreferenced" segment directories removed directories that an old snapshot (or a running merge) still used. Fixed: during operation only `Drop` of an obsolete segment deletes it; orphan GC runs only at open.
+3. *Deleted docs stayed in the statistics after `force_merge`* when there was a single segment. Fixed: a single segment with deletes is rewritten too (expunge deletes).
+4. *The chaos harness could report false losses*: a delete killed after its fsync but before its ACK may or may not have happened. The child now announces `TRY DEL` first and such ids are excluded. A *negative control* proves the harness detects real ack-before-persist bugs.
+5. *Benchmark hygiene:* fiqa/scidocs timings first overlapped with a low-priority compile and were re-run (originals kept in `results/stage2/superseded/`). Every repeat records the 1-minute load average.
+
+### Key metrics
 
 | metric | value | how measured | source file |
 |---|---|---|---|
@@ -60,10 +94,15 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 | Indexing throughput (1 thread) | 16.3k–34.1k docs/s (trec-covid 171k docs: 20.6k ± 1.5k docs/s) | wall time of build, 3 repeats | `results/<D>/*.json` (`repeats[].docs_per_sec`) |
 | Query latency, exhaustive, k=10 (1 thread) | p50 4 µs (nfcorpus) … 761 µs (trec-covid); p99 ≤ 1.7 ms | per-query `Instant`, 3 repeats | `results/tables.md` |
 | Index heap size | 9.3–10.7 bytes/posting; trec-covid 122.6 MB for 13.2M postings | allocator-instrumented `strata-mem` | `results/memory.tsv` |
+| Storage parity | disk engine (3 segments and force-merged) returns byte-identical run files to the in-memory index on 5/5 datasets | `run_stage2.sh` + `compare_runs.py` + `cmp` | `results/stage2/parity/` |
+| Crash consistency | 100 kill -9 iterations: 113,480 acked adds, 2,639 acked deletes, 0 lost, 0 resurrected; negative control caught (147 lost) | `strata-chaos run` | `results/stage2/chaos.json`, `chaos_negative_control.json` |
+| Compressed index size | 3.7-4.8 B/posting incl. positions (trec-covid 53.8 MB); 1.02-1.24x Tantivy-with-positions | segment file sizes | `results/stage2/tables.md` |
+| WAL group commit | 224 docs/s with 1 doc per fsync vs 12,224 docs/s with 1,000 (scifact) | `--batch` sweep, 3 builds | `results/stage2/scifact/strata-disk.batch*.json` |
+| Recovery time | p50 23.4 ms, max 62.3 ms (open + WAL replay) | timed in chaos harness | `results/stage2/chaos.json` |
 | Tests | 48 tests (unit + proptest vs brute force), 10/10 consecutive passes | `cargo test --workspace` ×10 | `results/test_10x.txt` |
 
-### Next steps (stage 2)
-Immutable on-disk segments: delta + varint/bitpacked postings, FST term dictionary, mmap. Then a WAL with crash recovery (kill -9 chaos test), tiered background merge, snapshot-isolated readers and tombstone deletes. Re-run every benchmark here against the on-disk segment through the same `SegmentReader` trait. See [What stage 2 should watch out for](#what-stage-2-should-watch-out-for).
+### Next steps
+Stage 3: dynamic pruning (WAND / block-max WAND) that must return exactly the exhaustive results, boolean/phrase/prefix queries on the stage-2 positions, metadata filters and a query parser.
 
 ---
 
@@ -89,6 +128,10 @@ Immutable on-disk segments: delta + varint/bitpacked postings, FST term dictiona
  │                                            Vec<Hit>                     │
  └─────────────────────────────────────────────────────────────────────────┘
    ▲                                   ▲
+   │                                   │
+   │ strata-storage (stage 2): WAL ─► write buffer ─► immutable mmap segments (FST, bit-packed
+   │   postings + skip table, positions, tombstones) ─► manifest; background merges; Arc snapshots
+   │                                   │
    │ strata-eval                       │ strata-bench
    │  beir.rs (corpus/queries/qrels)   │  Tantivy 0.27 + StrataTokenizer
    │  metrics.rs (trec_eval-exact)     │  same metrics / run format
@@ -126,6 +169,9 @@ target/release/strata-eval run --dataset fiqa --k1 1.2 --b 0.75 --stemmer porter
 target/release/strata-eval eval --dataset scifact --run results/runs/scifact/<tag>.trec
 target/release/strata-bench tantivy --dataset scifact [--tokenizer native]
 target/release/strata-mem --datasets scifact nfcorpus
+target/release/strata-eval run --dataset fiqa --engine disk [--force-merge]   # stage 2 durable index
+target/release/strata-chaos run --dir data/chaos --iterations 100           # kill -9 harness
+scripts/run_stage2.sh                    # every stage-2 number
 
 scripts/run_all.sh                       # everything in BENCHMARK.md (9.5 min on this M2)
 python3 -I scripts/make_tables.py        # regenerate the tables from results/*.json
@@ -147,13 +193,13 @@ let hits = Searcher::new(&segment, Bm25Params::ANSERINI)
 println!("{} {}", segment.external_id(hits[0].doc), hits[0].score);
 ```
 
-## Limitations (stage 1, honest list)
+## Limitations (honest list)
 
-- **In-memory only, single segment, no persistence, no deletes, no concurrency.** The index is rebuilt from JSONL every run.
+- **One writer process per index directory, not enforced** (no lock file). Durability is tested against process crashes (kill -9), **not power loss or OS crashes**. No checksums on segment files (only on WAL records and tombstone files).
+- Deleted documents keep counting in N/df until merged (as in Lucene), so scores drift slightly with deletes.
 - **Exhaustive retrieval.** Query cost grows with total postings for the query terms. No WAND yet.
-- **No positions**, so no phrase queries. No field weighting (title and body are concatenated, Anserini "flat").
+- Positions are stored (stage 2) but not queried yet. No field weighting (title and body are concatenated, Anserini "flat").
 - **Unexplained residual gap to Anserini** on nfcorpus (−0.0013 nDCG@10) and trec-covid (−0.0012). Total token counts differ by 0.07% / 0.01%. Our *guess* is tokenizer edge cases (Lucene's StandardTokenizer emits tokens for emoji-class symbols like ©/®, and the two may use different Unicode versions). I couldn't run Lucene here to diff tokens, so this is unverified.
-- **`df` is still segment-local.** `with_stats` takes global N/avgdl but not global document frequencies.
 - **Latency numbers are single-machine, single-thread, in-process** (no network, no serialization), on a laptop with heterogeneous cores and background processes. trec-covid has only 50 queries, so its "p99" is simply its maximum.
 - **The Tantivy comparison is not a claim that strata is faster.** Tantivy's index is compressed (4.5–5.1× smaller), it does far more, and we did not profile it. strata's exhaustive scan over raw `u32` postings is cheap on these small corpora. The gap may well reverse at scale or once stage 2 adds compression.
 - MS MARCO and other large BEIR sets were deliberately not run (disk budget).
@@ -163,7 +209,7 @@ println!("{} {}", segment.external_id(hits[0].doc), hits[0].score);
 The project is built incrementally; each stage ends with tests, measured numbers and an updated README/BENCHMARK.
 
 - [x] **1. Foundation:** analyzer, in-memory inverted index, BM25, BEIR eval + pytrec_eval cross-check, Tantivy/Anserini baselines.
-- [ ] **2. Storage engine:** immutable mmap segments (delta + varint/bitpacked postings, FST term dict), WAL + crash recovery (kill -9 chaos test), background tiered merge, snapshot-isolated readers, deletes via tombstones.
+- [x] **2. Storage engine:** immutable mmap segments (delta + varint/bitpacked postings, FST term dict), WAL + crash recovery (kill -9 chaos test), background tiered merge, snapshot-isolated readers, deletes via tombstones.
 - [ ] **3. Query engine:** WAND / block-max WAND, boolean/phrase/prefix queries, metadata filters, query parser; latency vs exhaustive.
 - [ ] **4. Vector index:** own HNSW, SIMD distance, int8 scalar quantization (+ optional product quantization), filtered ANN; recall@10 vs latency curves vs brute force.
 - [ ] **5. Hybrid retrieval:** RRF + weighted/normalized fusion, optional cross-encoder rerank; BEIR nDCG lexical vs dense vs hybrid.
@@ -173,15 +219,12 @@ The project is built incrementally; each stage ends with tests, measured numbers
 - [ ] **9. Agent integration:** MCP server (search/ingest tools), agent memory use-case demo, eval of retrieval quality on agent tasks.
 - [ ] **10. Ops & polish:** Docker/compose files (documented, not required to run), dashboards, capacity/perf report, architecture doc.
 
-## What stage 2 should watch out for
+## What the next stage should watch out for
 
-- Keep `InMemorySegment` as the **oracle**: the on-disk segment must return bit-identical runs on all five datasets (`compare_runs.py`), and the proptest should run against both.
-- **Decide where doc-length quantization lives.** Storing 1-byte norms like Lucene/Tantivy saves 3 bytes/doc. Results above show it's quality-neutral here, but it changes scores, so it should be a format-level decision recorded in segment metadata (next to `AnalyzerConfig`).
-- **Global statistics across segments.** Once there are many segments, `N`, `avgdl` *and* `df` must be aggregated (deleted docs included or not: decide and document). Lucene counts deleted docs in df until merge.
-- The `SegmentReader` GAT isn't object-safe. A multi-segment searcher will need generics or an enum over segment kinds rather than `Vec<Box<dyn SegmentReader>>`.
-- Indexing is dominated by analysis (70–77% of build time, BENCHMARK.md). Parallel analysis plus per-thread segments is the natural speed-up and fits the segment design.
-- Compression will slow exhaustive scans. Measure decode cost separately, and re-run the Tantivy comparison afterwards to see if the latency picture changes.
-- Data on this machine: ~26 GB free disk. Keep segment files under `data/` or a tmp dir and clean them up in tests.
+- Pruning (WAND/MaxScore) must return **exactly** the exhaustive results. Sum contributions in the same term order as the TAAT accumulator, visit docs in global doc order so ties break identically, and keep a safety margin on f32 upper bounds. Check with a proptest and with BEIR run files.
+- The per-block `(max_tf, min_doc_len)` bounds are already in the skip table; single-block terms have no skip table, so their bound comes from the header.
+- Filters need per-document metadata: that is a segment format change (bump `FORMAT_VERSION`) and a WAL record change.
+- The disk path is 1.4-1.8x slower than in-memory at k=10. Pruning has to beat the TAAT baseline *on this machine*, not just do less work in theory.
 
 ## License
 
