@@ -14,7 +14,8 @@
 //!    `bucket = FNV-1a(id) % 100` field, the same one the lexical stage-3
 //!    filter benchmark uses): filter-during-traversal vs brute-force fallback;
 //! 5. effectiveness of HNSW runs (nDCG@10 vs the exact dense run);
-//! 6. a micro-benchmark of the dot-product kernels (scalar vs NEON).
+//! 6. a micro-benchmark of the dot-product kernels (f32 scalar vs NEON; int8
+//!    auto-vectorized SDOT vs hand-written NEON widening).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -26,7 +27,7 @@ use serde::Serialize;
 use strata_eval::beir::Dataset;
 use strata_eval::harness::{mean_std, write_trec_run, LatencyStats};
 use strata_eval::metrics::{evaluate, Run};
-use strata_vector::distance::{dot, dot_i8, dot_i8_scalar, dot_scalar};
+use strata_vector::distance::{dot, dot_i8, dot_i8_neon_widening, dot_scalar};
 use strata_vector::embeddings::{DatasetEmbeddings, EmbeddingMeta};
 use strata_vector::{exact_top_k, Hnsw, HnswConfig, Neighbor, ScalarQuantizer, SearchContext};
 
@@ -353,11 +354,15 @@ fn main() -> Result<()> {
         time(&|i| dot_scalar(&a, emb.corpus.get(i))),
     );
     kernel.insert("f32_neon".into(), time(&|i| dot(&a, emb.corpus.get(i))));
+    // `dot_i8` is the scalar loop, auto-vectorized to SDOT by LLVM.
     kernel.insert(
-        "i8_scalar".into(),
-        time(&|i| dot_i8_scalar(&qa, sq.code(i)) as f32),
+        "i8_autovec_sdot".into(),
+        time(&|i| dot_i8(&qa, sq.code(i)) as f32),
     );
-    kernel.insert("i8_neon".into(), time(&|i| dot_i8(&qa, sq.code(i)) as f32));
+    kernel.insert(
+        "i8_neon_widening".into(),
+        time(&|i| dot_i8_neon_widening(&qa, sq.code(i)) as f32),
+    );
     eprintln!("[{}] kernels ns/dot: {:?}", args.dataset, kernel);
 
     let report = Report {

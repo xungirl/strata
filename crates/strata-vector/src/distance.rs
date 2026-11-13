@@ -25,16 +25,27 @@ pub fn dot(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Dot product of two equal-length i8 vectors, accumulated exactly in i32.
+///
+/// This deliberately uses the *plain scalar loop*: integer addition is
+/// associative, so LLVM is free to vectorize it, and on
+/// `aarch64-apple-darwin` (whose default CPU enables the `dotprod`
+/// extension) it compiles to `SDOT` instructions (16 multiply-adds per
+/// instruction; see `results/stage4/asm_dot_i8_scalar.s`). Measured, that
+/// beats our hand-written NEON widening kernel ([`dot_i8_neon_widening`])
+/// by about 2x (BENCHMARK.md stage 4). The `SDOT` intrinsic itself
+/// (`vdotq_s32`) is still unstable in Rust. Floats are different: f32
+/// addition is not associative, so the compiler must keep the scalar order
+/// and the manual NEON f32 kernel wins.
 #[inline]
 pub fn dot_i8(a: &[i8], b: &[i8]) -> i32 {
-    #[cfg(target_arch = "aarch64")]
-    {
-        neon::dot_i8(a, b)
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        dot_i8_scalar(a, b)
-    }
+    dot_i8_scalar(a, b)
+}
+
+/// Hand-written NEON int8 dot product (widening multiply + pairwise add).
+/// Kept for comparison; see [`dot_i8`].
+#[cfg(target_arch = "aarch64")]
+pub fn dot_i8_neon_widening(a: &[i8], b: &[i8]) -> i32 {
+    neon::dot_i8(a, b)
 }
 
 /// Portable f32 dot product with 4 independent accumulators (lets the
@@ -135,6 +146,8 @@ mod tests {
         assert_eq!(dot(&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0]), 32.0);
         assert_eq!(dot_i8(&[1, -2, 3], &[4, 5, -6]), 4 - 10 - 18);
         assert_eq!(dot_i8(&[-128; 40], &[-128; 40]), 40 * 16384);
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!(dot_i8_neon_widening(&[-128; 40], &[-128; 40]), 40 * 16384);
         assert_eq!(dot(&[], &[]), 0.0);
     }
 
@@ -151,7 +164,10 @@ mod tests {
         #[test]
         fn simd_i8_matches_scalar(v in prop::collection::vec((any::<i8>(), any::<i8>()), 0..700)) {
             let (a, b): (Vec<i8>, Vec<i8>) = v.into_iter().unzip();
-            prop_assert_eq!(dot_i8(&a, &b), dot_i8_scalar(&a, &b)); // integer: exact
+            let exact: i32 = a.iter().zip(&b).map(|(x, y)| i32::from(*x) * i32::from(*y)).sum();
+            prop_assert_eq!(dot_i8(&a, &b), exact); // integer: exact
+            #[cfg(target_arch = "aarch64")]
+            prop_assert_eq!(dot_i8_neon_widening(&a, &b), exact);
         }
     }
 }
