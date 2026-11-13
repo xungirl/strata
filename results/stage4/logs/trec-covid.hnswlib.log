@@ -1,0 +1,7 @@
+[trec-covid] hnswlib ef=10: recall@10 0.8640 p50 110us
+[trec-covid] hnswlib ef=20: recall@10 0.9140 p50 151us
+[trec-covid] hnswlib ef=40: recall@10 0.9700 p50 232us
+[trec-covid] hnswlib ef=80: recall@10 0.9840 p50 422us
+[trec-covid] hnswlib ef=160: recall@10 0.9980 p50 726us
+[trec-covid] hnswlib ef=320: recall@10 0.9980 p50 1332us
+[trec-covid] hnswlib ef=640: recall@10 1.0000 p50 2415us

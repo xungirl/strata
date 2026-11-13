@@ -1,0 +1,27 @@
+[scifact] 5183 docs x 384 dims, 300 test queries, load 2.91
+[scifact] exact: nDCG@10 0.7127, p50 304us
+[scifact] HNSW build 0.6s ± 0.0
+[scifact] f32 ef=  10: recall@10 0.8717, p50 12us p99 23us
+[scifact] f32 ef=  20: recall@10 0.9423, p50 20us p99 32us
+[scifact] f32 ef=  40: recall@10 0.9813, p50 34us p99 47us
+[scifact] f32 ef=  80: recall@10 0.9967, p50 58us p99 82us
+[scifact] f32 ef= 160: recall@10 1.0000, p50 99us p99 132us
+[scifact] f32 ef= 320: recall@10 1.0000, p50 161us p99 210us
+[scifact] f32 ef= 640: recall@10 1.0000, p50 258us p99 325us
+[scifact] sq8 ef=  10: recall@10 0.8260, p50 6us p99 15us
+[scifact] sq8 ef=  20: recall@10 0.9430, p50 11us p99 17us
+[scifact] sq8 ef=  40: recall@10 0.9837, p50 19us p99 28us
+[scifact] sq8 ef=  80: recall@10 0.9963, p50 39us p99 50us
+[scifact] sq8 ef= 160: recall@10 0.9997, p50 65us p99 89us
+[scifact] sq8 ef= 320: recall@10 1.0000, p50 115us p99 139us
+[scifact] sq8 ef= 640: recall@10 1.0000, p50 194us p99 240us
+[scifact] filter 1% ef=40: graph recall 1.0000 p50 587us | brute p50 8us
+[scifact] filter 1% ef=160: graph recall 1.0000 p50 616us | brute p50 8us
+[scifact] filter 1% ef=640: graph recall 1.0000 p50 622us | brute p50 8us
+[scifact] filter 10% ef=40: graph recall 0.9993 p50 159us | brute p50 28us
+[scifact] filter 10% ef=160: graph recall 1.0000 p50 365us | brute p50 28us
+[scifact] filter 10% ef=640: graph recall 1.0000 p50 650us | brute p50 28us
+[scifact] filter 50% ef=40: graph recall 0.9947 p50 56us | brute p50 108us
+[scifact] filter 50% ef=160: graph recall 1.0000 p50 152us | brute p50 108us
+[scifact] filter 50% ef=640: graph recall 1.0000 p50 353us | brute p50 108us
+[scifact] kernels ns/dot: {"i8_neon_widening": 18.032958, "i8_autovec_sdot": 8.306896, "f32_scalar": 93.8126665, "f32_neon": 29.481583}

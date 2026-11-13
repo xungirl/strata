@@ -1,0 +1,7 @@
+[scifact] hnswlib ef=10: recall@10 0.8773 p50 68us
+[scifact] hnswlib ef=20: recall@10 0.9443 p50 105us
+[scifact] hnswlib ef=40: recall@10 0.9820 p50 170us
+[scifact] hnswlib ef=80: recall@10 0.9960 p50 278us
+[scifact] hnswlib ef=160: recall@10 0.9993 p50 454us
+[scifact] hnswlib ef=320: recall@10 1.0000 p50 708us
+[scifact] hnswlib ef=640: recall@10 1.0000 p50 1072us

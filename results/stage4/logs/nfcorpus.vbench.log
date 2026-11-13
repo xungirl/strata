@@ -1,0 +1,27 @@
+[nfcorpus] 3633 docs x 384 dims, 323 test queries, load 2.79
+[nfcorpus] exact: nDCG@10 0.3430, p50 231us
+[nfcorpus] HNSW build 0.3s ± 0.0
+[nfcorpus] f32 ef=  10: recall@10 0.7777, p50 11us p99 20us
+[nfcorpus] f32 ef=  20: recall@10 0.8734, p50 18us p99 31us
+[nfcorpus] f32 ef=  40: recall@10 0.9399, p50 30us p99 46us
+[nfcorpus] f32 ef=  80: recall@10 0.9771, p50 52us p99 73us
+[nfcorpus] f32 ef= 160: recall@10 0.9950, p50 92us p99 119us
+[nfcorpus] f32 ef= 320: recall@10 0.9985, p50 150us p99 189us
+[nfcorpus] f32 ef= 640: recall@10 0.9994, p50 236us p99 277us
+[nfcorpus] sq8 ef=  10: recall@10 0.7378, p50 6us p99 13us
+[nfcorpus] sq8 ef=  20: recall@10 0.8573, p50 11us p99 15us
+[nfcorpus] sq8 ef=  40: recall@10 0.9365, p50 18us p99 27us
+[nfcorpus] sq8 ef=  80: recall@10 0.9765, p50 34us p99 45us
+[nfcorpus] sq8 ef= 160: recall@10 0.9916, p50 63us p99 79us
+[nfcorpus] sq8 ef= 320: recall@10 0.9985, p50 111us p99 140us
+[nfcorpus] sq8 ef= 640: recall@10 0.9991, p50 184us p99 222us
+[nfcorpus] filter 1% ef=40: graph recall 1.0000 p50 388us | brute p50 6us
+[nfcorpus] filter 1% ef=160: graph recall 1.0000 p50 420us | brute p50 6us
+[nfcorpus] filter 1% ef=640: graph recall 1.0000 p50 408us | brute p50 6us
+[nfcorpus] filter 10% ef=40: graph recall 0.9963 p50 137us | brute p50 22us
+[nfcorpus] filter 10% ef=160: graph recall 1.0000 p50 290us | brute p50 22us
+[nfcorpus] filter 10% ef=640: graph recall 1.0000 p50 430us | brute p50 22us
+[nfcorpus] filter 50% ef=40: graph recall 0.9663 p50 48us | brute p50 73us
+[nfcorpus] filter 50% ef=160: graph recall 0.9981 p50 134us | brute p50 73us
+[nfcorpus] filter 50% ef=640: graph recall 1.0000 p50 310us | brute p50 73us
+[nfcorpus] kernels ns/dot: {"f32_scalar": 93.1862915, "f32_neon": 29.194667, "i8_neon_widening": 18.115292, "i8_autovec_sdot": 8.5043955}

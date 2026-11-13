@@ -1,0 +1,27 @@
+[scidocs] 25657 docs x 384 dims, 1000 test queries, load 2.29
+[scidocs] exact: nDCG@10 0.2052, p50 1052us
+[scidocs] HNSW build 5.5s ± 0.0
+[scidocs] f32 ef=  10: recall@10 0.8772, p50 40us p99 74us
+[scidocs] f32 ef=  20: recall@10 0.9533, p50 52us p99 83us
+[scidocs] f32 ef=  40: recall@10 0.9854, p50 90us p99 132us
+[scidocs] f32 ef=  80: recall@10 0.9961, p50 163us p99 233us
+[scidocs] f32 ef= 160: recall@10 0.9995, p50 277us p99 388us
+[scidocs] f32 ef= 320: recall@10 0.9999, p50 486us p99 712us
+[scidocs] f32 ef= 640: recall@10 1.0000, p50 818us p99 1186us
+[scidocs] sq8 ef=  10: recall@10 0.8365, p50 16us p99 88us
+[scidocs] sq8 ef=  20: recall@10 0.9453, p50 18us p99 26us
+[scidocs] sq8 ef=  40: recall@10 0.9844, p50 32us p99 43us
+[scidocs] sq8 ef=  80: recall@10 0.9965, p50 65us p99 99us
+[scidocs] sq8 ef= 160: recall@10 0.9994, p50 101us p99 133us
+[scidocs] sq8 ef= 320: recall@10 0.9999, p50 193us p99 289us
+[scidocs] sq8 ef= 640: recall@10 1.0000, p50 365us p99 487us
+[scidocs] filter 1% ef=40: graph recall 1.0000 p50 2820us | brute p50 39us
+[scidocs] filter 1% ef=160: graph recall 1.0000 p50 6397us | brute p50 39us
+[scidocs] filter 1% ef=640: graph recall 1.0000 p50 7846us | brute p50 39us
+[scidocs] filter 10% ef=40: graph recall 0.9994 p50 547us | brute p50 144us
+[scidocs] filter 10% ef=160: graph recall 1.0000 p50 1628us | brute p50 144us
+[scidocs] filter 10% ef=640: graph recall 1.0000 p50 4247us | brute p50 144us
+[scidocs] filter 50% ef=40: graph recall 0.9932 p50 156us | brute p50 742us
+[scidocs] filter 50% ef=160: graph recall 0.9998 p50 471us | brute p50 742us
+[scidocs] filter 50% ef=640: graph recall 1.0000 p50 1562us | brute p50 742us
+[scidocs] kernels ns/dot: {"f32_scalar": 96.628854, "i8_autovec_sdot": 8.4379375, "f32_neon": 31.63825, "i8_neon_widening": 19.060979}

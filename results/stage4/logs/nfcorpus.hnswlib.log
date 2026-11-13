@@ -1,0 +1,7 @@
+[nfcorpus] hnswlib ef=10: recall@10 0.7718 p50 63us
+[nfcorpus] hnswlib ef=20: recall@10 0.8684 p50 94us
+[nfcorpus] hnswlib ef=40: recall@10 0.9341 p50 156us
+[nfcorpus] hnswlib ef=80: recall@10 0.9749 p50 255us
+[nfcorpus] hnswlib ef=160: recall@10 0.9938 p50 420us
+[nfcorpus] hnswlib ef=320: recall@10 0.9975 p50 654us
+[nfcorpus] hnswlib ef=640: recall@10 0.9988 p50 954us

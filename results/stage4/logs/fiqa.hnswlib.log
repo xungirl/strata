@@ -1,0 +1,7 @@
+[fiqa] hnswlib ef=10: recall@10 0.7644 p50 102us
+[fiqa] hnswlib ef=20: recall@10 0.8656 p50 154us
+[fiqa] hnswlib ef=40: recall@10 0.9299 p50 253us
+[fiqa] hnswlib ef=80: recall@10 0.9704 p50 423us
+[fiqa] hnswlib ef=160: recall@10 0.9898 p50 730us
+[fiqa] hnswlib ef=320: recall@10 0.9961 p50 1283us
+[fiqa] hnswlib ef=640: recall@10 0.9985 p50 2198us

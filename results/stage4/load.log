@@ -1,0 +1,10 @@
+2026-11-13T11:28:49Z scifact vbench load1=2.91 waited=0s ok
+2026-11-13T11:28:54Z scifact hnswlib load1=2.84 waited=0s ok
+2026-11-13T11:29:05Z nfcorpus vbench load1=2.79 waited=0s ok
+2026-11-13T11:29:09Z nfcorpus hnswlib load1=2.65 waited=0s ok
+2026-11-13T11:29:16Z fiqa vbench load1=2.52 waited=0s ok
+2026-11-13T11:31:20Z fiqa hnswlib load1=2.44 waited=0s ok
+2026-11-13T11:34:18Z scidocs vbench load1=2.29 waited=0s ok
+2026-11-13T11:35:16Z scidocs hnswlib load1=2.85 waited=0s ok
+2026-11-13T11:36:27Z trec-covid vbench load1=3.60 waited=0s ok
+2026-11-13T11:41:06Z trec-covid hnswlib load1=3.01 waited=0s ok

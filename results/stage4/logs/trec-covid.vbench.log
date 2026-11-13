@@ -1,0 +1,27 @@
+[trec-covid] 171332 docs x 384 dims, 50 test queries, load 3.60
+[trec-covid] exact: nDCG@10 0.7578, p50 5908us
+[trec-covid] HNSW build 90.3s ± 2.7
+[trec-covid] f32 ef=  10: recall@10 0.8660, p50 74us p99 148us
+[trec-covid] f32 ef=  20: recall@10 0.9160, p50 79us p99 104us
+[trec-covid] f32 ef=  40: recall@10 0.9820, p50 141us p99 221us
+[trec-covid] f32 ef=  80: recall@10 0.9900, p50 265us p99 364us
+[trec-covid] f32 ef= 160: recall@10 1.0000, p50 494us p99 674us
+[trec-covid] f32 ef= 320: recall@10 1.0000, p50 896us p99 1330us
+[trec-covid] f32 ef= 640: recall@10 1.0000, p50 1581us p99 2206us
+[trec-covid] sq8 ef=  10: recall@10 0.8320, p50 63us p99 478us
+[trec-covid] sq8 ef=  20: recall@10 0.9180, p50 30us p99 51us
+[trec-covid] sq8 ef=  40: recall@10 0.9820, p50 51us p99 111us
+[trec-covid] sq8 ef=  80: recall@10 0.9900, p50 102us p99 155us
+[trec-covid] sq8 ef= 160: recall@10 1.0000, p50 208us p99 311us
+[trec-covid] sq8 ef= 320: recall@10 1.0000, p50 402us p99 528us
+[trec-covid] sq8 ef= 640: recall@10 1.0000, p50 762us p99 938us
+[trec-covid] filter 1% ef=40: graph recall 1.0000 p50 7088us | brute p50 264us
+[trec-covid] filter 1% ef=160: graph recall 1.0000 p50 18728us | brute p50 264us
+[trec-covid] filter 1% ef=640: graph recall 1.0000 p50 43922us | brute p50 264us
+[trec-covid] filter 10% ef=40: graph recall 0.9940 p50 1070us | brute p50 3171us
+[trec-covid] filter 10% ef=160: graph recall 1.0000 p50 3733us | brute p50 3171us
+[trec-covid] filter 10% ef=640: graph recall 1.0000 p50 11952us | brute p50 3171us
+[trec-covid] filter 50% ef=40: graph recall 0.9880 p50 391us | brute p50 8425us
+[trec-covid] filter 50% ef=160: graph recall 1.0000 p50 1385us | brute p50 8425us
+[trec-covid] filter 50% ef=640: graph recall 1.0000 p50 3387us | brute p50 8425us
+[trec-covid] kernels ns/dot: {"i8_autovec_sdot": 9.0629585, "f32_scalar": 96.027708, "i8_neon_widening": 18.7242705, "f32_neon": 32.1803125}

@@ -1,0 +1,6 @@
+scifact: 300 queries, identical top-10 lists 300/300, identical sets 300/300, max |score diff| 1.19e-07
+nfcorpus: 323 queries, identical top-10 lists 280/323, identical sets 318/323, max |score diff| 1.19e-07
+fiqa: 648 queries, identical top-10 lists 647/648, identical sets 648/648, max |score diff| 1.79e-07
+scidocs: 1000 queries, identical top-10 lists 1000/1000, identical sets 1000/1000, max |score diff| 1.79e-07
+trec-covid: 50 queries, identical top-10 lists 47/50, identical sets 49/50, max |score diff| 1.79e-07
+Note: every set mismatch (nfcorpus 5, trec-covid 1) has its 10th and 11th scores tied within 1e-6 (checked for nfcorpus: 5/5), i.e. the cut falls inside a tie; list-order differences come from the run file's trec_eval ordering (ties by doc id descending) vs numpy's stable index order. nfcorpus contains duplicate documents.

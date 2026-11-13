@@ -1,0 +1,14 @@
+Source: https://raw.githubusercontent.com/nmslib/hnswlib/v0.8.0/hnswlib/hnswlib.h (lines 11-21), fetched 2026-11-13T11:29:30Z
+hnswlib enables its hand-written SIMD distance kernels only when compiling for x86 (SSE/AVX); on arm64 (Apple M2) it uses its generic scalar C++ loops.
+
+#ifndef NO_MANUAL_VECTORIZATION
+#if (defined(__SSE__) || _M_IX86_FP > 0 || defined(_M_AMD64) || defined(_M_X64))
+#define USE_SSE
+#ifdef __AVX__
+#define USE_AVX
+#ifdef __AVX512F__
+#define USE_AVX512
+#endif
+#endif
+#endif
+#endif

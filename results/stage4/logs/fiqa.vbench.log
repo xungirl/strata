@@ -1,0 +1,27 @@
+[fiqa] 57638 docs x 384 dims, 648 test queries, load 2.52
+[fiqa] exact: nDCG@10 0.4035, p50 2126us
+[fiqa] HNSW build 23.9s ± 0.2
+[fiqa] f32 ef=  10: recall@10 0.7705, p50 50us p99 100us
+[fiqa] f32 ef=  20: recall@10 0.8781, p50 72us p99 123us
+[fiqa] f32 ef=  40: recall@10 0.9384, p50 120us p99 183us
+[fiqa] f32 ef=  80: recall@10 0.9727, p50 216us p99 328us
+[fiqa] f32 ef= 160: recall@10 0.9903, p50 393us p99 614us
+[fiqa] f32 ef= 320: recall@10 0.9963, p50 755us p99 1158us
+[fiqa] f32 ef= 640: recall@10 0.9980, p50 1301us p99 1906us
+[fiqa] sq8 ef=  10: recall@10 0.7515, p50 17us p99 35us
+[fiqa] sq8 ef=  20: recall@10 0.8755, p50 24us p99 41us
+[fiqa] sq8 ef=  40: recall@10 0.9352, p50 43us p99 66us
+[fiqa] sq8 ef=  80: recall@10 0.9715, p50 81us p99 120us
+[fiqa] sq8 ef= 160: recall@10 0.9890, p50 160us p99 227us
+[fiqa] sq8 ef= 320: recall@10 0.9963, p50 279us p99 416us
+[fiqa] sq8 ef= 640: recall@10 0.9983, p50 554us p99 834us
+[fiqa] filter 1% ef=40: graph recall 0.9991 p50 5344us | brute p50 85us
+[fiqa] filter 1% ef=160: graph recall 0.9998 p50 13364us | brute p50 85us
+[fiqa] filter 1% ef=640: graph recall 0.9998 p50 22576us | brute p50 85us
+[fiqa] filter 10% ef=40: graph recall 0.9900 p50 801us | brute p50 361us
+[fiqa] filter 10% ef=160: graph recall 0.9997 p50 2603us | brute p50 361us
+[fiqa] filter 10% ef=640: graph recall 1.0000 p50 7438us | brute p50 361us
+[fiqa] filter 50% ef=40: graph recall 0.9623 p50 215us | brute p50 1938us
+[fiqa] filter 50% ef=160: graph recall 0.9952 p50 692us | brute p50 1938us
+[fiqa] filter 50% ef=640: graph recall 0.9992 p50 2302us | brute p50 1938us
+[fiqa] kernels ns/dot: {"f32_scalar": 109.553625, "i8_neon_widening": 19.845292, "f32_neon": 33.4117295, "i8_autovec_sdot": 9.6674375}
