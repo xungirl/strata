@@ -18,15 +18,18 @@
 //! mismatch there is a classic silent-bug source in search engines.
 //!
 //! Known differences from Lucene (documented in the README):
-//! * Stemmer: `rust-stemmers` implements Snowball English ("Porter2"), while
-//!   Lucene's `PorterStemFilter` implements the original 1980 Porter algorithm.
-//!   They agree on most words but not all (e.g. Porter2 maps "generously" ->
-//!   "generous", Porter -> "gener").
+//! * Stemmer: the default is our port of Lucene's classic Porter stemmer
+//!   ([`crate::porter`]), the one Anserini uses. Snowball English ("Porter2",
+//!   via `rust-stemmers`, also Tantivy's default) is available as an option;
+//!   the two disagree on some words (Porter2 maps "generously" -> "generous",
+//!   Porter -> "gener").
 //! * Tokenizer: `unicode-segmentation` implements the same Unicode standard
 //!   (UAX #29) as Lucene's `StandardTokenizer`, but edge cases (emoji,
 //!   very long tokens, some scripts) may differ.
 
 use rust_stemmers::{Algorithm, Stemmer};
+
+use crate::porter::porter_stem;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use unicode_segmentation::UnicodeSegmentation;
@@ -59,6 +62,8 @@ pub enum Stopwords {
 pub enum StemmerKind {
     /// No stemming: "running" stays "running".
     None,
+    /// The original Porter (1980) algorithm, Lucene flavour ([`crate::porter`]).
+    Porter,
     /// Snowball English, a.k.a. Porter2 (via the `rust-stemmers` crate).
     Porter2,
 }
@@ -89,7 +94,7 @@ impl AnalyzerConfig {
             lowercase: true,
             strip_possessive: true,
             stopwords: Stopwords::LuceneEnglish,
-            stemmer: StemmerKind::Porter2,
+            stemmer: StemmerKind::Porter,
             max_token_bytes: 255,
         }
     }
@@ -112,6 +117,14 @@ impl Default for AnalyzerConfig {
     }
 }
 
+/// The stemmer actually used at runtime. An enum whose variants carry
+/// different data: only the Snowball variant needs a `rust_stemmers::Stemmer`.
+enum StemmerImpl {
+    None,
+    Porter,
+    Snowball(Stemmer),
+}
+
 /// A ready-to-use analyzer built from an [`AnalyzerConfig`].
 ///
 /// Building it once (stopword `HashSet`, stemmer tables) and then reusing it for
@@ -119,8 +132,7 @@ impl Default for AnalyzerConfig {
 pub struct Analyzer {
     config: AnalyzerConfig,
     stopwords: HashSet<String>,
-    // `Option<T>` is Rust's "maybe a value": `None` when stemming is off.
-    stemmer: Option<Stemmer>,
+    stemmer: StemmerImpl,
 }
 
 impl Analyzer {
@@ -136,8 +148,9 @@ impl Analyzer {
             Stopwords::Custom(words) => words.iter().map(|w| w.to_lowercase()).collect(),
         };
         let stemmer = match config.stemmer {
-            StemmerKind::None => None,
-            StemmerKind::Porter2 => Some(Stemmer::create(Algorithm::English)),
+            StemmerKind::None => StemmerImpl::None,
+            StemmerKind::Porter => StemmerImpl::Porter,
+            StemmerKind::Porter2 => StemmerImpl::Snowball(Stemmer::create(Algorithm::English)),
         };
         Analyzer {
             config,
@@ -196,12 +209,13 @@ impl Analyzer {
         if self.stopwords.contains(&lowered) {
             return None;
         }
-        match &self.stemmer {
+        Some(match &self.stemmer {
+            StemmerImpl::None => lowered,
+            StemmerImpl::Porter => porter_stem(&lowered),
             // `stem` returns a `Cow<str>`: borrowed if unchanged, owned if
             // changed. `into_owned` gives us a `String` either way.
-            Some(stemmer) => Some(stemmer.stem(&lowered).into_owned()),
-            None => Some(lowered),
-        }
+            StemmerImpl::Snowball(stemmer) => stemmer.stem(&lowered).into_owned(),
+        })
     }
 }
 
@@ -291,12 +305,22 @@ mod tests {
     }
 
     #[test]
-    fn porter2_stems() {
+    fn porter_stems_by_default() {
         assert_eq!(
             english("connected connecting connection connections"),
             vec!["connect", "connect", "connect", "connect"]
         );
-        assert_eq!(english("studies studying"), vec!["studi", "studi"]);
+        assert_eq!(english("generously"), vec!["gener"]);
+    }
+
+    #[test]
+    fn porter2_is_selectable_and_differs() {
+        let cfg = AnalyzerConfig {
+            stemmer: StemmerKind::Porter2,
+            ..AnalyzerConfig::english()
+        };
+        let a = Analyzer::new(cfg);
+        assert_eq!(a.analyze("generously studies"), vec!["generous", "studi"]);
     }
 
     #[test]

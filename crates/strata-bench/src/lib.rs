@@ -96,7 +96,7 @@ mod tests {
             vec![
                 ("cat".to_string(), 0),
                 ("run".to_string(), 1),
-                ("quick".to_string(), 2)
+                ("quickli".to_string(), 2)
             ]
         );
     }

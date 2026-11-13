@@ -11,12 +11,14 @@
 //! |--------------|-------------------------------------------------------------|
 //! | [`types`]    | small strongly-typed ids (`DocId`, `SegmentId`, `ShardId`)  |
 //! | [`analyzer`] | text -> tokens (tokenize, lowercase, stopwords, stemming)   |
+//! | [`porter`]   | classic Porter stemmer (Lucene-compatible port)             |
 //! | [`index`]    | the [`index::SegmentReader`] trait + in-memory segment      |
 //! | [`scoring`]  | BM25 math (IDF, term-frequency saturation, length norm)     |
 //! | [`search`]   | bag-of-words queries and exhaustive top-k retrieval         |
 
 pub mod analyzer;
 pub mod index;
+pub mod porter;
 pub mod scoring;
 pub mod search;
 pub mod types;

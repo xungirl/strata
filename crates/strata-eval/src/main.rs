@@ -70,7 +70,7 @@ struct RunArgs {
     b: f32,
     #[arg(long, value_enum, default_value_t = DocLen::Exact)]
     doc_length: DocLen,
-    #[arg(long, value_enum, default_value_t = Stem::Porter2)]
+    #[arg(long, value_enum, default_value_t = Stem::Porter)]
     stemmer: Stem,
     #[arg(long, value_enum, default_value_t = Stop::Lucene)]
     stopwords: Stop,
@@ -98,6 +98,7 @@ enum DocLen {
 }
 #[derive(Clone, Copy, ValueEnum, Serialize)]
 enum Stem {
+    Porter,
     Porter2,
     None,
 }
@@ -111,6 +112,7 @@ impl RunArgs {
     fn analyzer_config(&self) -> AnalyzerConfig {
         AnalyzerConfig {
             stemmer: match self.stemmer {
+                Stem::Porter => StemmerKind::Porter,
                 Stem::Porter2 => StemmerKind::Porter2,
                 Stem::None => StemmerKind::None,
             },
@@ -140,6 +142,7 @@ impl RunArgs {
                 DocLen::Lucene => "lucenelen",
             };
             let stem = match self.stemmer {
+                Stem::Porter => "porter",
                 Stem::Porter2 => "porter2",
                 Stem::None => "nostem",
             };
