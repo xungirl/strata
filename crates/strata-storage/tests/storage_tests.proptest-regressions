@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc c56003e099850d8e97d408a69a59ea217fb70d3b2f87ab0520ddad5701a590c3 # shrinks to docs = [[], [], [], [], [4], [], []], flush = 1, factor = 0, deletes = [Index(3354)], query = [4, 4], k = 6
+cc b9ab772d7b0263145e30d37f276ff80b5aa9e55bbc25e9b5e22d0518116a2ef3 # shrinks to docs = [[0]], targets = [1]

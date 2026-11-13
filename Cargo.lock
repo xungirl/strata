@@ -1150,6 +1150,7 @@ dependencies = [
  "serde_json",
  "stats_alloc",
  "strata-core",
+ "strata-storage",
 ]
 
 [[package]]
@@ -1157,6 +1158,7 @@ name = "strata-storage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "crc32fast",
  "fst",
  "memmap2",

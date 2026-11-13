@@ -67,9 +67,9 @@ pub fn merge_segments(
         let mut parts: Vec<(usize, u64)> = indexed.iter().map(|iv| (iv.index, iv.value)).collect();
         parts.sort_unstable(); // by source index, so docs stay ascending
         postings.clear();
-        for (src, ord) in parts {
+        for (src, offset) in parts {
             let map = &doc_maps[src];
-            let mut cursor = sources[src].0.postings_by_ordinal(ord);
+            let mut cursor = sources[src].0.postings_at(offset);
             while let Some(p) = cursor.next() {
                 let new_doc = map[p.doc.as_usize()];
                 if new_doc != DELETED {

@@ -5,9 +5,8 @@
 //! ```text
 //! seg-000007/
 //!   meta.json      SegmentMeta (format version, counts, analyzer config)
-//!   terms.fst      FST: term bytes -> term ordinal
-//!   terms.bin      per ordinal, 20 bytes: df u32 | postings offset u64 | positions offset u64
-//!   postings.bin   per term: varint num_blocks, skip table, bit-packed blocks (see below)
+//!   terms.fst      FST: term bytes -> byte offset of the term in postings.bin
+//!   postings.bin   per term: header, skip table, bit-packed blocks (see below)
 //!   positions.bin  per term, per posting: tf varints (first absolute, then gaps)
 //!   doclens.bin    u32 per doc (exact token count)
 //!   ids.fst        FST: external id -> doc id
@@ -17,9 +16,10 @@
 //! Postings of one term, in blocks of [`BLOCK_SIZE`] (=128) docs:
 //!
 //! ```text
-//! varint num_blocks
-//! skip entry * num_blocks, 20 bytes each:
+//! varint df | varint positions offset (absolute, in positions.bin) | varint num_blocks
+//! if num_blocks > 1:  skip entry * num_blocks, 20 bytes each:
 //!     last_doc u32 | block byte offset u32 | max_tf u32 | min_doc_len u32 | positions offset u32
+//! else:               varint max_tf | varint min_doc_len      (most terms are rare: no table)
 //! block * num_blocks:
 //!     doc_bits u8 | tf_bits u8 | doc gaps (bit-packed) | tf - 1 (bit-packed)
 //! ```
@@ -50,14 +50,13 @@ use strata_core::analyzer::AnalyzerConfig;
 use strata_core::index::{Posting, SegmentReader};
 use strata_core::types::{DocId, SegmentId};
 
-use crate::codec::{bits_needed, pack, read_u32, read_u64, read_varint, unpack, write_varint};
+use crate::codec::{bits_needed, pack, read_u32, read_varint, unpack, write_varint};
 
 /// Documents per postings block.
 pub const BLOCK_SIZE: usize = 128;
 /// On-disk format version written into `meta.json`.
 pub const FORMAT_VERSION: u32 = 1;
 const SKIP_ENTRY_BYTES: usize = 20;
-const TERM_INFO_BYTES: usize = 20;
 
 /// Contents of `meta.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -94,7 +93,6 @@ pub struct SegmentWriter {
     id: SegmentId,
     analyzer: AnalyzerConfig,
     terms_fst: MapBuilder<BufWriter<File>>,
-    term_infos: BufWriter<File>,
     postings: BufWriter<File>,
     positions: BufWriter<File>,
     postings_len: u64,
@@ -117,7 +115,6 @@ impl SegmentWriter {
         };
         Ok(SegmentWriter {
             terms_fst: MapBuilder::new(open("terms.fst")?)?,
-            term_infos: open("terms.bin")?,
             postings: open("postings.bin")?,
             positions: open("positions.bin")?,
             dir,
@@ -206,20 +203,20 @@ impl SegmentWriter {
         }
 
         let mut header = Vec::new();
+        write_varint(postings.len() as u64, &mut header);
+        write_varint(self.positions_len, &mut header);
         write_varint(num_blocks as u64, &mut header);
-        for s in &skips {
-            for v in s {
-                header.extend_from_slice(&v.to_le_bytes());
+        if num_blocks > 1 {
+            for s in &skips {
+                for v in s {
+                    header.extend_from_slice(&v.to_le_bytes());
+                }
             }
+        } else {
+            write_varint(u64::from(skips[0][2]), &mut header); // max_tf
+            write_varint(u64::from(skips[0][3]), &mut header); // min_doc_len
         }
-
-        // Term info: df | postings offset | positions offset.
-        self.term_infos
-            .write_all(&(postings.len() as u32).to_le_bytes())?;
-        self.term_infos
-            .write_all(&self.postings_len.to_le_bytes())?;
-        self.term_infos
-            .write_all(&self.positions_len.to_le_bytes())?;
+        let term_offset = self.postings_len;
 
         self.postings.write_all(&header)?;
         self.postings.write_all(&self.block_buf)?;
@@ -227,7 +224,7 @@ impl SegmentWriter {
         self.positions.write_all(&self.pos_buf)?;
         self.positions_len += self.pos_buf.len() as u64;
 
-        self.terms_fst.insert(term.as_bytes(), self.num_terms)?;
+        self.terms_fst.insert(term.as_bytes(), term_offset)?;
         self.num_terms += 1;
         self.num_postings += postings.len() as u64;
         Ok(())
@@ -242,7 +239,6 @@ impl SegmentWriter {
             id,
             analyzer,
             terms_fst,
-            mut term_infos,
             mut postings,
             mut positions,
             num_terms,
@@ -250,7 +246,6 @@ impl SegmentWriter {
             ..
         } = self;
         terms_fst.finish()?;
-        term_infos.flush()?;
         postings.flush()?;
         positions.flush()?;
 
@@ -365,7 +360,6 @@ pub struct DiskSegment {
     dir: PathBuf,
     meta: SegmentMeta,
     terms: Map<Bytes>,
-    term_infos: Bytes,
     postings: Bytes,
     positions: Bytes,
     doc_lens: Bytes,
@@ -374,14 +368,6 @@ pub struct DiskSegment {
     /// Set when the segment has been merged away; the directory is removed
     /// when the last reference (e.g. an old snapshot) is dropped.
     obsolete: AtomicBool,
-}
-
-/// Per-term metadata from `terms.bin`.
-#[derive(Clone, Copy, Debug)]
-pub struct TermInfo {
-    pub doc_freq: u32,
-    postings_offset: u64,
-    positions_offset: u64,
 }
 
 impl DiskSegment {
@@ -400,7 +386,6 @@ impl DiskSegment {
         }
         Ok(DiskSegment {
             terms: Map::new(map_file(&dir.join("terms.fst"))?)?,
-            term_infos: map_file(&dir.join("terms.bin"))?,
             postings: map_file(&dir.join("postings.bin"))?,
             positions: map_file(&dir.join("positions.bin"))?,
             doc_lens: map_file(&dir.join("doclens.bin"))?,
@@ -434,19 +419,9 @@ impl DiskSegment {
         Ok(total)
     }
 
-    /// Look up a term's metadata.
-    pub fn term_info(&self, term: &str) -> Option<TermInfo> {
-        let ord = self.terms.get(term.as_bytes())? as usize;
-        Some(self.term_info_at(ord))
-    }
-
-    fn term_info_at(&self, ord: usize) -> TermInfo {
-        let at = ord * TERM_INFO_BYTES;
-        TermInfo {
-            doc_freq: read_u32(&self.term_infos, at),
-            postings_offset: read_u64(&self.term_infos, at + 4),
-            positions_offset: read_u64(&self.term_infos, at + 12),
-        }
+    /// Byte offset of a term's postings, if the term exists.
+    fn term_offset(&self, term: &str) -> Option<u64> {
+        self.terms.get(term.as_bytes())
     }
 
     /// The term dictionary FST (for prefix/range queries and merging).
@@ -454,9 +429,10 @@ impl DiskSegment {
         &self.terms
     }
 
-    /// Postings cursor for a term ordinal from [`term_dict`](Self::term_dict).
-    pub fn postings_by_ordinal(&self, ord: u64) -> DiskPostings<'_> {
-        DiskPostings::new(self, self.term_info_at(ord as usize))
+    /// Postings cursor for a value from [`term_dict`](Self::term_dict)
+    /// (the term's byte offset in `postings.bin`).
+    pub fn postings_at(&self, offset: u64) -> DiskPostings<'_> {
+        DiskPostings::new(self, offset)
     }
 
     /// Doc id of an external id (the newest one if it occurs several times).
@@ -466,8 +442,8 @@ impl DiskSegment {
 
     /// Cursor over a term's postings (with positions and block skipping).
     pub fn cursor(&self, term: &str) -> Option<DiskPostings<'_>> {
-        self.term_info(term)
-            .map(|info| DiskPostings::new(self, info))
+        self.term_offset(term)
+            .map(|off| DiskPostings::new(self, off))
     }
 }
 
@@ -509,7 +485,7 @@ impl SegmentReader for DiskSegment {
     }
 
     fn doc_freq(&self, term: &str) -> u32 {
-        self.term_info(term).map_or(0, |t| t.doc_freq)
+        self.cursor(term).map_or(0, |c| c.doc_freq())
     }
 
     fn postings(&self, term: &str) -> Option<DiskPostings<'_>> {
@@ -543,6 +519,8 @@ pub struct DiskPostings<'a> {
     df: u32,
     num_blocks: usize,
     skips: &'a [u8],
+    /// For single-block terms (no skip table): the block's skip data.
+    single: Option<SkipEntry>,
     blocks: &'a [u8],
     positions: &'a [u8],
     /// Index of the block currently decoded in `docs`/`tfs` (`usize::MAX` = none yet).
@@ -560,19 +538,38 @@ pub struct DiskPostings<'a> {
 }
 
 impl<'a> DiskPostings<'a> {
-    fn new(seg: &'a DiskSegment, info: TermInfo) -> DiskPostings<'a> {
-        let data = &seg.postings[info.postings_offset as usize..];
+    fn new(seg: &'a DiskSegment, offset: u64) -> DiskPostings<'a> {
+        let data = &seg.postings[offset as usize..];
         let mut pos = 0;
+        let df = read_varint(data, &mut pos) as u32;
+        let positions_offset = read_varint(data, &mut pos) as usize;
         let num_blocks = read_varint(data, &mut pos) as usize;
-        let skips = &data[pos..pos + num_blocks * SKIP_ENTRY_BYTES];
-        let blocks = &data[pos + num_blocks * SKIP_ENTRY_BYTES..];
+        let (skips, single) = if num_blocks > 1 {
+            let skips = &data[pos..pos + num_blocks * SKIP_ENTRY_BYTES];
+            pos += num_blocks * SKIP_ENTRY_BYTES;
+            (skips, None)
+        } else {
+            let max_tf = read_varint(data, &mut pos) as u32;
+            let min_doc_len = read_varint(data, &mut pos) as u32;
+            // `last_doc` is unknown until decoded; u32::MAX means "the block
+            // extends to the end of the list", which is true for the only block.
+            let entry = SkipEntry {
+                last_doc: u32::MAX,
+                block_offset: 0,
+                max_tf,
+                min_doc_len,
+                positions_offset: 0,
+            };
+            (&data[..0], Some(entry))
+        };
         DiskPostings {
             seg,
-            df: info.doc_freq,
+            df,
             num_blocks,
             skips,
-            blocks,
-            positions: &seg.positions[info.positions_offset as usize..],
+            single,
+            blocks: &data[pos..],
+            positions: &seg.positions[positions_offset..],
             block: usize::MAX,
             block_len: 0,
             idx: 0,
@@ -593,8 +590,13 @@ impl<'a> DiskPostings<'a> {
         self.num_blocks
     }
 
-    /// Skip entry of block `b`.
+    /// Skip entry of block `b`. For a single-block term, `last_doc` is
+    /// `u32::MAX` (the block covers the rest of the list).
     pub fn skip_entry(&self, b: usize) -> SkipEntry {
+        if let Some(entry) = self.single {
+            debug_assert_eq!(b, 0);
+            return entry;
+        }
         let at = b * SKIP_ENTRY_BYTES;
         SkipEntry {
             last_doc: read_u32(self.skips, at),
@@ -662,7 +664,9 @@ impl<'a> DiskPostings<'a> {
         };
         let b = (start..self.num_blocks).find(|&b| self.skip_entry(b).last_doc >= target)?;
         self.decode_block(b);
-        while self.docs[self.idx] < target {
+        // The bound matters for single-block terms, whose skip entry says
+        // `last_doc = u32::MAX`: the target may lie beyond every doc.
+        while self.idx < self.block_len && self.docs[self.idx] < target {
             self.idx += 1;
         }
         self.next()
