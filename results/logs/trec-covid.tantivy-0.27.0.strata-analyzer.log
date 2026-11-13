@@ -1,0 +1,7 @@
+[trec-covid] tantivy repeat 1: index 8.506s + merge 0.000s (1 segs, 20142 docs/s), 24434700 bytes, p50 2931us p99 13052us
+[trec-covid]   k=10 p50 1152us p99 7562us
+[trec-covid] tantivy repeat 2: index 8.328s + merge 0.000s (1 segs, 20572 docs/s), 24434700 bytes, p50 2875us p99 12335us
+[trec-covid]   k=10 p50 1044us p99 6964us
+[trec-covid] tantivy repeat 3: index 8.243s + merge 0.000s (1 segs, 20784 docs/s), 24434700 bytes, p50 2815us p99 12079us
+[trec-covid]   k=10 p50 1059us p99 6919us
+trec-covid	tantivy-0.27.0.strata-analyzer	nDCG@10=0.6146	R@100=0.1119	R@1000=0.4074	MRR@10=0.8840	docs/s=20500±328	p50=2874us	p99=12488us	k10_p50=1085us	k10_p99=7148us

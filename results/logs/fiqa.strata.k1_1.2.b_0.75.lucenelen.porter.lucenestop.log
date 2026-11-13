@@ -1,0 +1,6 @@
+[fiqa] loaded 57638 docs, 648 queries in 0.05s
+[fiqa] repeat 1: index 1.654s (34853 docs/s, analysis-only 1.168s), queries p50 469us p99 851us, k=10 p50 272us p99 615us
+[fiqa] repeat 2: index 1.660s (34731 docs/s, analysis-only 1.205s), queries p50 463us p99 915us, k=10 p50 258us p99 636us
+[fiqa] repeat 3: index 1.699s (33922 docs/s, analysis-only 1.199s), queries p50 452us p99 817us, k=10 p50 254us p99 582us
+wrote results/fiqa/strata.k1_1.2.b_0.75.lucenelen.porter.lucenestop.json and results/runs/fiqa/strata.k1_1.2.b_0.75.lucenelen.porter.lucenestop.trec
+fiqa	strata.k1_1.2.b_0.75.lucenelen.porter.lucenestop	nDCG@10=0.2537	R@100=0.5489	R@1000=0.7591	MRR@10=0.3089	docs/s=34502±506	p50=461us	p99=861us	k10_p50=261us	k10_p99=611us

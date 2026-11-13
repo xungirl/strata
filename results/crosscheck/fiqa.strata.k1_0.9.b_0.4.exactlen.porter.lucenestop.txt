@@ -1,0 +1,7 @@
+pytrec_eval 0.5, 648 queries, run=results/runs/fiqa/strata.k1_0.9.b_0.4.exactlen.porter.lucenestop.trec
+metric              strata  pytrec_eval      |diff|    max per-query |diff|
+ndcg_at_10          0.2353       0.2353    5.55e-17                0.00e+00
+recall_at_100       0.5400       0.5400    1.33e-15                0.00e+00
+recall_at_1000      0.7403       0.7403    1.22e-15                0.00e+00
+mrr_at_10           0.2958       0.2958    4.44e-16                0.00e+00
+MATCH (all means within 5e-5)

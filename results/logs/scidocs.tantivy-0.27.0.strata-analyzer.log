@@ -1,0 +1,7 @@
+[scidocs] tantivy repeat 1: index 1.347s + merge 0.000s (1 segs, 19041 docs/s), 4201402 bytes, p50 555us p99 1413us
+[scidocs]   k=10 p50 161us p99 658us
+[scidocs] tantivy repeat 2: index 1.239s + merge 0.000s (1 segs, 20705 docs/s), 4201402 bytes, p50 556us p99 1433us
+[scidocs]   k=10 p50 163us p99 636us
+[scidocs] tantivy repeat 3: index 1.178s + merge 0.000s (1 segs, 21775 docs/s), 4201402 bytes, p50 591us p99 1518us
+[scidocs]   k=10 p50 170us p99 642us
+scidocs	tantivy-0.27.0.strata-analyzer	nDCG@10=0.1545	R@100=0.3601	R@1000=0.5699	MRR@10=0.2672	docs/s=20507±1378	p50=567us	p99=1455us	k10_p50=165us	k10_p99=645us

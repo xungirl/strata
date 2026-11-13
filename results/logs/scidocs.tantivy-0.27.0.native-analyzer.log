@@ -1,0 +1,7 @@
+[scidocs] tantivy repeat 1: index 1.013s + merge 0.000s (1 segs, 25340 docs/s), 4160345 bytes, p50 604us p99 2086us
+[scidocs]   k=10 p50 192us p99 1059us
+[scidocs] tantivy repeat 2: index 1.522s + merge 0.000s (1 segs, 16857 docs/s), 4160345 bytes, p50 758us p99 2345us
+[scidocs]   k=10 p50 176us p99 693us
+[scidocs] tantivy repeat 3: index 1.039s + merge 0.000s (1 segs, 24694 docs/s), 4160345 bytes, p50 568us p99 1414us
+[scidocs]   k=10 p50 166us p99 656us
+scidocs	tantivy-0.27.0.native-analyzer	nDCG@10=0.1561	R@100=0.3600	R@1000=0.5714	MRR@10=0.2717	docs/s=22297±4723	p50=643us	p99=1949us	k10_p50=178us	k10_p99=803us

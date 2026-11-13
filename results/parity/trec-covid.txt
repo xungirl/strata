@@ -1,0 +1,11 @@
+strata (k1=1.2 b=0.75, Lucene-quantized lengths) vs tantivy 0.27 (strata analyzer)
+queries compared: 50 (only in A: 0, only in B: 0)
+identical top-10 lists: 45/50 (90.0%)
+identical top-10 sets:  48/50 (96.0%)
+mean overlap@10: 0.9960
+max |score diff| on shared top-10 docs: 7.63e-06
+queries compared: 50 (only in A: 0, only in B: 0)
+identical top-100 lists: 13/50 (26.0%)
+identical top-100 sets:  50/50 (100.0%)
+mean overlap@100: 1.0000
+max |score diff| on shared top-100 docs: 7.63e-06

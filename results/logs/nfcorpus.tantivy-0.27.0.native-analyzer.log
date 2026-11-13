@@ -1,0 +1,7 @@
+[nfcorpus] tantivy repeat 1: index 0.171s + merge 0.000s (1 segs, 21213 docs/s), 877814 bytes, p50 20us p99 214us
+[nfcorpus]   k=10 p50 9us p99 68us
+[nfcorpus] tantivy repeat 2: index 0.174s + merge 0.000s (1 segs, 20833 docs/s), 877814 bytes, p50 20us p99 206us
+[nfcorpus]   k=10 p50 9us p99 68us
+[nfcorpus] tantivy repeat 3: index 0.171s + merge 0.000s (1 segs, 21187 docs/s), 877814 bytes, p50 20us p99 208us
+[nfcorpus]   k=10 p50 9us p99 67us
+nfcorpus	tantivy-0.27.0.native-analyzer	nDCG@10=0.3205	R@100=0.2464	R@1000=0.3735	MRR@10=0.5216	docs/s=21078±212	p50=20us	p99=209us	k10_p50=9us	k10_p99=68us

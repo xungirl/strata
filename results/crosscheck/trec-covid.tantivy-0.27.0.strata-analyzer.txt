@@ -1,0 +1,7 @@
+pytrec_eval 0.5, 50 queries, run=results/runs/trec-covid/tantivy-0.27.0.strata-analyzer.trec
+metric              strata  pytrec_eval      |diff|    max per-query |diff|
+ndcg_at_10          0.6146       0.6146    1.11e-16                0.00e+00
+recall_at_100       0.1119       0.1119    1.39e-17                0.00e+00
+recall_at_1000      0.4074       0.4074    1.11e-16                0.00e+00
+mrr_at_10           0.8840       0.8840    5.55e-16                0.00e+00
+MATCH (all means within 5e-5)

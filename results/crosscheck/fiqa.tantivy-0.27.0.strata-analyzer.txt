@@ -1,0 +1,7 @@
+pytrec_eval 0.5, 648 queries, run=results/runs/fiqa/tantivy-0.27.0.strata-analyzer.trec
+metric              strata  pytrec_eval      |diff|    max per-query |diff|
+ndcg_at_10          0.2537       0.2537    2.78e-16                0.00e+00
+recall_at_100       0.5489       0.5489    1.33e-15                0.00e+00
+recall_at_1000      0.7591       0.7591    1.11e-15                0.00e+00
+mrr_at_10           0.3089       0.3089    6.66e-16                0.00e+00
+MATCH (all means within 5e-5)

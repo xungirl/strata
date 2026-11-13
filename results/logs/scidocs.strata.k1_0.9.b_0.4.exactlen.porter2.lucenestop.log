@@ -1,0 +1,6 @@
+[scidocs] loaded 25657 docs, 1000 queries in 0.17s
+[scidocs] repeat 1: index 1.460s (17567 docs/s, analysis-only 1.147s), queries p50 254us p99 462us, k=10 p50 83us p99 248us
+[scidocs] repeat 2: index 1.536s (16700 docs/s, analysis-only 1.144s), queries p50 262us p99 546us, k=10 p50 89us p99 248us
+[scidocs] repeat 3: index 1.486s (17268 docs/s, analysis-only 1.195s), queries p50 267us p99 698us, k=10 p50 86us p99 244us
+wrote results/scidocs/strata.k1_0.9.b_0.4.exactlen.porter2.lucenestop.json and results/runs/scidocs/strata.k1_0.9.b_0.4.exactlen.porter2.lucenestop.trec
+scidocs	strata.k1_0.9.b_0.4.exactlen.porter2.lucenestop	nDCG@10=0.1504	R@100=0.3479	R@1000=0.5638	MRR@10=0.2627	docs/s=17179±440	p50=261us	p99=568us	k10_p50=86us	k10_p99=247us

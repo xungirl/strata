@@ -1,0 +1,6 @@
+[trec-covid] loaded 171332 docs, 50 queries in 0.19s
+[trec-covid] repeat 1: index 9.288s (18447 docs/s, analysis-only 8.050s), queries p50 1018us p99 1907us, k=10 p50 667us p99 1485us
+[trec-covid] repeat 2: index 9.364s (18298 docs/s, analysis-only 8.249s), queries p50 1033us p99 1996us, k=10 p50 679us p99 1472us
+[trec-covid] repeat 3: index 9.336s (18351 docs/s, analysis-only 7.378s), queries p50 1042us p99 1953us, k=10 p50 656us p99 1449us
+wrote results/trec-covid/strata.k1_0.9.b_0.4.exactlen.porter2.lucenestop.json and results/runs/trec-covid/strata.k1_0.9.b_0.4.exactlen.porter2.lucenestop.trec
+trec-covid	strata.k1_0.9.b_0.4.exactlen.porter2.lucenestop	nDCG@10=0.5898	R@100=0.1089	R@1000=0.3950	MRR@10=0.8552	docs/s=18365±76	p50=1031us	p99=1952us	k10_p50=668us	k10_p99=1469us

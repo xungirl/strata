@@ -1,0 +1,7 @@
+[fiqa] tantivy repeat 1: index 2.085s + merge 0.000s (1 segs, 27640 docs/s), 6938756 bytes, p50 1893us p99 7492us
+[fiqa]   k=10 p50 718us p99 4118us
+[fiqa] tantivy repeat 2: index 2.420s + merge 0.000s (1 segs, 23813 docs/s), 6938756 bytes, p50 1722us p99 6826us
+[fiqa]   k=10 p50 670us p99 3888us
+[fiqa] tantivy repeat 3: index 2.891s + merge 0.000s (1 segs, 19939 docs/s), 6938756 bytes, p50 2005us p99 9010us
+[fiqa]   k=10 p50 466us p99 2217us
+fiqa	tantivy-0.27.0.strata-analyzer	nDCG@10=0.2537	R@100=0.5489	R@1000=0.7591	MRR@10=0.3089	docs/s=23798±3851	p50=1873us	p99=7776us	k10_p50=618us	k10_p99=3408us

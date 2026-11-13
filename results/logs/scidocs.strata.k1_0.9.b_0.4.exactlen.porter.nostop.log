@@ -1,0 +1,6 @@
+[scidocs] loaded 25657 docs, 1000 queries in 0.18s
+[scidocs] repeat 1: index 1.376s (18640 docs/s, analysis-only 0.922s), queries p50 394us p99 558us, k=10 p50 159us p99 296us
+[scidocs] repeat 2: index 1.370s (18730 docs/s, analysis-only 0.919s), queries p50 402us p99 561us, k=10 p50 160us p99 297us
+[scidocs] repeat 3: index 1.374s (18674 docs/s, analysis-only 0.935s), queries p50 402us p99 583us, k=10 p50 177us p99 353us
+wrote results/scidocs/strata.k1_0.9.b_0.4.exactlen.porter.nostop.json and results/runs/scidocs/strata.k1_0.9.b_0.4.exactlen.porter.nostop.trec
+scidocs	strata.k1_0.9.b_0.4.exactlen.porter.nostop	nDCG@10=0.1495	R@100=0.3454	R@1000=0.5628	MRR@10=0.2611	docs/s=18681±45	p50=400us	p99=567us	k10_p50=165us	k10_p99=315us

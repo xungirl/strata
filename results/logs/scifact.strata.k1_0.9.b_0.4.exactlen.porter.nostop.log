@@ -1,0 +1,6 @@
+[scifact] loaded 5183 docs, 300 queries in 0.01s
+[scifact] repeat 1: index 0.325s (15943 docs/s, analysis-only 0.221s), queries p50 190us p99 239us, k=10 p50 54us p99 106us
+[scifact] repeat 2: index 0.321s (16123 docs/s, analysis-only 0.220s), queries p50 190us p99 238us, k=10 p50 52us p99 88us
+[scifact] repeat 3: index 0.314s (16490 docs/s, analysis-only 0.219s), queries p50 189us p99 235us, k=10 p50 51us p99 86us
+wrote results/scifact/strata.k1_0.9.b_0.4.exactlen.porter.nostop.json and results/runs/scifact/strata.k1_0.9.b_0.4.exactlen.porter.nostop.trec
+scifact	strata.k1_0.9.b_0.4.exactlen.porter.nostop	nDCG@10=0.6807	R@100=0.9230	R@1000=0.9733	MRR@10=0.6498	docs/s=16185±279	p50=190us	p99=237us	k10_p50=52us	k10_p99=93us

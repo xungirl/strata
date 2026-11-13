@@ -1,0 +1,6 @@
+[scifact] loaded 5183 docs, 300 queries in 0.01s
+[scifact] repeat 1: index 0.309s (16763 docs/s, analysis-only 0.215s), queries p50 139us p99 210us, k=10 p50 28us p99 65us
+[scifact] repeat 2: index 0.302s (17137 docs/s, analysis-only 0.218s), queries p50 144us p99 207us, k=10 p50 31us p99 68us
+[scifact] repeat 3: index 0.422s (12272 docs/s, analysis-only 0.219s), queries p50 142us p99 201us, k=10 p50 30us p99 68us
+wrote results/scifact/strata.k1_1.2.b_0.75.lucenelen.porter.lucenestop.json and results/runs/scifact/strata.k1_1.2.b_0.75.lucenelen.porter.lucenestop.trec
+scifact	strata.k1_1.2.b_0.75.lucenelen.porter.lucenestop	nDCG@10=0.6826	R@100=0.9282	R@1000=0.9767	MRR@10=0.6464	docs/s=15391±2707	p50=142us	p99=206us	k10_p50=29us	k10_p99=67us

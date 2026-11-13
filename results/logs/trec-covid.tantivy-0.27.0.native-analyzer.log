@@ -1,0 +1,7 @@
+[trec-covid] tantivy repeat 1: index 7.001s + merge 0.000s (1 segs, 24471 docs/s), 23957584 bytes, p50 3011us p99 13159us
+[trec-covid]   k=10 p50 1100us p99 8687us
+[trec-covid] tantivy repeat 2: index 6.819s + merge 0.000s (1 segs, 25125 docs/s), 23957584 bytes, p50 2917us p99 11961us
+[trec-covid]   k=10 p50 1073us p99 7841us
+[trec-covid] tantivy repeat 3: index 6.785s + merge 0.000s (1 segs, 25252 docs/s), 23957584 bytes, p50 3020us p99 12055us
+[trec-covid]   k=10 p50 1056us p99 7322us
+trec-covid	tantivy-0.27.0.native-analyzer	nDCG@10=0.6049	R@100=0.1110	R@1000=0.4050	MRR@10=0.8663	docs/s=24949±419	p50=2982us	p99=12392us	k10_p50=1076us	k10_p99=7950us

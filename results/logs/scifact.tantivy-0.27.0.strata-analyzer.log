@@ -1,0 +1,7 @@
+[scifact] tantivy repeat 1: index 0.292s + merge 0.000s (1 segs, 17759 docs/s), 1208222 bytes, p50 257us p99 610us
+[scifact]   k=10 p50 77us p99 322us
+[scifact] tantivy repeat 2: index 0.311s + merge 0.000s (1 segs, 16651 docs/s), 1208222 bytes, p50 245us p99 672us
+[scifact]   k=10 p50 74us p99 301us
+[scifact] tantivy repeat 3: index 0.285s + merge 0.000s (1 segs, 18183 docs/s), 1208222 bytes, p50 255us p99 607us
+[scifact]   k=10 p50 74us p99 297us
+scifact	tantivy-0.27.0.strata-analyzer	nDCG@10=0.6826	R@100=0.9282	R@1000=0.9767	MRR@10=0.6464	docs/s=17531±791	p50=252us	p99=630us	k10_p50=75us	k10_p99=307us

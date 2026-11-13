@@ -1,0 +1,7 @@
+[scifact] tantivy repeat 1: index 0.356s + merge 0.000s (1 segs, 14554 docs/s), 1179951 bytes, p50 267us p99 661us
+[scifact]   k=10 p50 79us p99 344us
+[scifact] tantivy repeat 2: index 0.258s + merge 0.000s (1 segs, 20128 docs/s), 1179951 bytes, p50 261us p99 707us
+[scifact]   k=10 p50 77us p99 323us
+[scifact] tantivy repeat 3: index 0.253s + merge 0.000s (1 segs, 20494 docs/s), 1179951 bytes, p50 260us p99 714us
+[scifact]   k=10 p50 79us p99 326us
+scifact	tantivy-0.27.0.native-analyzer	nDCG@10=0.6838	R@100=0.9216	R@1000=0.9700	MRR@10=0.6485	docs/s=18392±3329	p50=263us	p99=694us	k10_p50=79us	k10_p99=331us

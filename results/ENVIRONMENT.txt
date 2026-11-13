@@ -1,0 +1,9 @@
+date: 2026-11-13T06:56:53Z
+git: 3c51408
+rustc: rustc 1.94.0 (4a4ef493e 2026-03-02)
+cargo: cargo 1.94.0 (85eff7c80 2026-01-15)
+os: macOS 15.4 (arm64)
+cpu: Apple M2, 8 cores (4 performance + 4 efficiency)
+memory: 24 GiB
+tantivy: 0.27.0
+build: cargo --release (opt-level 3, debug=1), single-threaded indexing and search
