@@ -17,10 +17,14 @@
 
 pub mod analyzer;
 pub mod index;
+pub mod scoring;
+pub mod search;
 pub mod types;
 
 // Re-export the handful of types most callers need, so users can write
 // `use strata_core::{Analyzer, Searcher}` instead of long module paths.
 pub use analyzer::{Analyzer, AnalyzerConfig};
 pub use index::{InMemoryIndexBuilder, InMemorySegment, Posting, SegmentReader};
+pub use scoring::Bm25Params;
+pub use search::{Hit, Query, Searcher};
 pub use types::{DocId, SegmentId, ShardId};
