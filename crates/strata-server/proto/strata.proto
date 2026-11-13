@@ -1,0 +1,44 @@
+// gRPC API of a strata node. Mirrors the HTTP/JSON API (see http.rs).
+syntax = "proto3";
+package strata.v1;
+
+service Strata {
+  // Add or replace documents. Returns after the WAL fsync (durable).
+  rpc Ingest(IngestRequest) returns (IngestResponse);
+  // Make ingested documents searchable (flush + new snapshot).
+  rpc Commit(CommitRequest) returns (CommitResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+message Field {
+  string name = 1;
+  oneof value {
+    string keyword = 2;
+    int64 int = 3;
+  }
+}
+
+message Document {
+  string id = 1;
+  string text = 2;
+  repeated Field fields = 3;
+  // Optional embedding (must match the node's dimension).
+  repeated float vector = 4;
+}
+
+message IngestRequest { repeated Document docs = 1; }
+message IngestResponse { uint64 seq = 1; uint32 accepted = 2; }
+message CommitRequest {}
+message CommitResponse { uint32 segments = 1; uint64 live_docs = 2; }
+
+message SearchRequest {
+  // Query language (see strata-query parser), e.g. `+vaccine "spike protein"`.
+  string query = 1;
+  uint32 k = 2;
+  // "lexical" (default), "dense" or "hybrid" (RRF of both).
+  string mode = 3;
+  repeated float vector = 4;
+}
+
+message Hit { string id = 1; float score = 2; }
+message SearchResponse { repeated Hit hits = 1; uint64 took_us = 2; }
