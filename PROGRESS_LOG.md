@@ -23,3 +23,9 @@
 - Headline: own HNSW on trec-covid (171k bge-small vectors): ef=160 recall@10 1.0000 at p50 515 µs vs 5,908 µs exact (11.5x); SQ8+rescore 202 µs (29x) (`results/stage4/tables.md`).
 - Headline: recall within 0.0125 of hnswlib 0.8.0 at every ef; exact top-10 cross-checked against numpy (`results/stage4/crosscheck_exact_knn.txt`); f32 NEON 3.2x scalar, int8 auto-vectorized SDOT 2.1x faster than hand NEON.
 - Caveats: hnswlib has no ARM SIMD (comparison flattering on this machine); single-threaded build; filtered ANN at 1% needs the brute-force fallback; no PQ.
+
+## Stage 5: Hybrid retrieval (tag `stage-5`)
+- Tests: 93 tests, 10/10 consecutive green runs (`results/stage5/test_10x.txt`); clippy -D warnings + fmt clean.
+- Headline: hybrid (fixed RRF k=60 / α=0.5) beats BM25 by +0.04..+0.21 nDCG@10 on 5/5 datasets (p ≤ 1e-5); best hybrid beats dense on scifact/nfcorpus/trec-covid (trec-covid 0.8051 vs 0.7578) (`results/stage5/tables.md`).
+- Headline: paired t-test matches SciPy on 5/5 datasets (`results/stage5/crosscheck/`).
+- Caveats: dense alone is best on fiqa/scidocs (fusion with weak BM25 hurts, significant); MiniLM-L-6 cross-encoder lowered nDCG@10 vs RRF on 4/5 datasets; fusion params not tuned on dev splits; reranking offline in Python.

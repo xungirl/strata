@@ -584,3 +584,92 @@ Note: every set mismatch (nfcorpus 5, trec-covid 1) has its 10th and 11th scores
 - Memory per vector: 1,536 B f32 + 384 B int8 + about 203 B of graph links (trec-covid: 263 MB + 66 MB + 35 MB).
 - Not implemented: product quantization, parallel/incremental-delete-aware builds, persistent graph loading in the benchmarks.
 - Tests: 87 tests, 10/10 consecutive green runs (`results/stage4/test_10x.txt`).
+
+
+---
+
+# Stage 5: hybrid retrieval
+
+Measured by `scripts/run_stage5.sh` (the final run re-used the cached re-ranked runs from the first run; re-ranking depends only on the RRF run, which is identical). Inputs: the stage-1 BM25 run (k1=0.9, b=0.4, Porter, top 1000) and the stage-4 exact dense run (bge-small-en-v1.5, top 1000). Fusion settings were fixed *before* looking at results: RRF k=60, weighted fusion α=0.5 (α = BM25 weight). Re-ranking: `cross-encoder/ms-marco-MiniLM-L-6-v2`, top 100 of the RRF run, max length 512 tokens, Apple GPU (MPS). Significance: paired two-sided randomization test with 100,000 sign flips (the smallest reportable p is 1e-5), plus a paired t-test cross-checked against `scipy.stats.ttest_rel`. These are quality measurements; the only timings are the re-ranker's wall time. The environment file says `(dirty)`: the run used the fusion fix for degenerate lists (commit `eval: fusion edge cases...`, made right after this run, with no other changes).
+
+```
+date: 2026-11-13T12:38:05Z
+git: 18fc715 (dirty)
+uptime:  4:38  up 65 days,  4:38, 3 users, load averages: 1.97 2.16 2.33
+```
+
+### nDCG@10: lexical vs dense vs hybrid vs re-ranked
+
+| dataset | BM25 | dense (bge-small, exact) | RRF k=60 | min-max α=0.5 | z-score α=0.5 | RRF + cross-encoder re-rank (top 100) |
+|---|---|---|---|---|---|---|
+| scifact | 0.6777 | 0.7127 | 0.7304 | **0.7382** | 0.7349 | 0.6858 |
+| nfcorpus | 0.3202 | 0.3430 | **0.3638** | 0.3579 | 0.3572 | 0.3525 |
+| fiqa | 0.2353 | **0.4035** | 0.3625 | 0.3905 | 0.3951 | 0.3695 |
+| scidocs | 0.1498 | **0.2052** | 0.1923 | 0.1961 | 0.1942 | 0.1683 |
+| trec-covid | 0.5943 | 0.7578 | 0.8039 | 0.7985 | **0.8051** | 0.7554 |
+
+(bold = best per dataset)
+
+### Recall@100
+
+| dataset | BM25 | dense | RRF | min-max α=0.5 | z-score α=0.5 | re-ranked |
+|---|---|---|---|---|---|---|
+| scifact | 0.9253 | 0.9417 | 0.9650 | 0.9617 | 0.9683 | 0.9650 |
+| nfcorpus | 0.2456 | 0.3110 | 0.3149 | 0.3135 | 0.3130 | 0.3149 |
+| fiqa | 0.5400 | 0.6963 | 0.6962 | 0.6860 | 0.6875 | 0.6962 |
+| scidocs | 0.3473 | 0.4591 | 0.4496 | 0.4558 | 0.4519 | 0.4496 |
+| trec-covid | 0.1090 | 0.1333 | 0.1427 | 0.1458 | 0.1476 | 0.1427 |
+
+### Paired significance (nDCG@10 difference, two-sided randomization test, 100,000 samples; * = p < 0.05)
+
+| dataset | queries | RRF − BM25 | RRF − dense | min-max − dense | re-rank − RRF | re-rank − BM25 |
+|---|---|---|---|---|---|---|
+| scifact | 300 | +0.0527 (p=1e-05)* | +0.0177 (p=0.126) | +0.0254 (p=0.0395)* | -0.0445 (p=0.00296)* | +0.0082 (p=0.598) |
+| nfcorpus | 323 | +0.0436 (p=1e-05)* | +0.0208 (p=0.00408)* | +0.0149 (p=0.0104)* | -0.0114 (p=0.0949) | +0.0322 (p=3e-05)* |
+| fiqa | 648 | +0.1272 (p=1e-05)* | -0.0410 (p=3e-05)* | -0.0129 (p=0.0978) | +0.0070 (p=0.415) | +0.1342 (p=1e-05)* |
+| scidocs | 1000 | +0.0424 (p=1e-05)* | -0.0129 (p=0.00053)* | -0.0091 (p=0.0128)* | -0.0239 (p=1e-05)* | +0.0185 (p=1e-05)* |
+| trec-covid | 50 | +0.2095 (p=1e-05)* | +0.0461 (p=0.0271)* | +0.0407 (p=0.0642) | -0.0485 (p=0.055) | +0.1611 (p=2e-05)* |
+
+Five datasets × five comparisons = 25 tests; with a Bonferroni correction the per-test threshold would be 0.002.
+
+### Oracle analysis: min-max α sweep on the *test* queries (not a fair result, shows sensitivity)
+
+| dataset | α=0.0 | α=0.1 | α=0.2 | α=0.3 | α=0.4 | α=0.5 | α=0.6 | α=0.7 | α=0.8 | α=0.9 | α=1.0 | best α |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| scifact | 0.7127 | 0.7176 | 0.7300 | 0.7353 | 0.7361 | 0.7382 | 0.7323 | 0.7203 | 0.7073 | 0.6962 | 0.6777 | 0.5 |
+| nfcorpus | 0.3430 | 0.3502 | 0.3554 | 0.3580 | 0.3599 | 0.3579 | 0.3562 | 0.3503 | 0.3422 | 0.3339 | 0.3202 | 0.4 |
+| fiqa | 0.4035 | 0.4148 | 0.4190 | 0.4229 | 0.4121 | 0.3905 | 0.3623 | 0.3271 | 0.2936 | 0.2600 | 0.2353 | 0.3 |
+| scidocs | 0.2052 | 0.2085 | 0.2081 | 0.2062 | 0.2034 | 0.1961 | 0.1888 | 0.1789 | 0.1692 | 0.1584 | 0.1498 | 0.1 |
+| trec-covid | 0.7578 | 0.7755 | 0.8006 | 0.8177 | 0.8179 | 0.7985 | 0.7780 | 0.7348 | 0.6918 | 0.6582 | 0.5943 | 0.4 |
+
+(α = weight of BM25; α=0 is dense only, α=1 is BM25 only)
+
+### Cross-encoder re-ranking cost (cross-encoder/ms-marco-MiniLM-L-6-v2, top 100)
+
+| dataset | pairs | seconds | pairs/s | device |
+|---|---|---|---|---|
+| scifact | 30,000 | 225.7 | 133 | mps |
+| nfcorpus | 32,300 | 256.5 | 126 | mps |
+| fiqa | 64,800 | 543.9 | 119 | mps |
+| scidocs | 100,000 | 824.0 | 121 | mps |
+| trec-covid | 5,000 | 37.1 | 135 | mps |
+
+### t-test cross-check vs SciPy (RRF vs BM25 per-query nDCG@10)
+
+| dataset | result |
+|---|---|
+| scifact | MATCH (scipy  : t=4.789156 p=2.63961e-06 mean_diff=0.052689) |
+| nfcorpus | MATCH (scipy  : t=6.145430 p=2.35431e-09 mean_diff=0.043599) |
+| fiqa | MATCH (scipy  : t=15.877046 p=3.50292e-48 mean_diff=0.127188) |
+| scidocs | MATCH (scipy  : t=13.215902 p=7.24175e-37 mean_diff=0.042444) |
+| trec-covid | MATCH (scipy  : t=8.504519 p=3.26753e-11 mean_diff=0.209536) |
+
+## Reading the numbers
+
+- **Hybrid beats BM25 everywhere and by a lot.** RRF − BM25 is +0.04 to +0.21 nDCG@10, p ≤ 1e-5 on all five datasets, which survives Bonferroni.
+- **Hybrid vs dense depends on the dataset.** Hybrid wins on scifact, nfcorpus and trec-covid: best fused nDCG@10 0.7382 / 0.3638 / 0.8051 vs dense 0.7127 / 0.3430 / 0.7578. On trec-covid, RRF − dense is +0.0461 (p=0.027). It **loses** on fiqa and scidocs, where BM25 is far behind dense (0.2353 vs 0.4035 on fiqa). Fusing in the weak retriever drags the strong one down: RRF − dense is −0.0410 on fiqa (p=3e-5) and −0.0129 on scidocs (p=5e-4). Only some of these vs-dense differences survive a Bonferroni threshold of 0.002.
+- **The fixed α=0.5 is not optimal.** The oracle sweep on the test queries puts the best α at 0.1-0.5 (dense-heavy on fiqa/scidocs). Choosing α per dataset on test queries would be tuning on the test set, so we report it only as sensitivity. A real system would tune on a dev split.
+- **The MS MARCO cross-encoder hurt.** Re-ranking the RRF top 100 with MiniLM-L-6 *lowered* nDCG@10 on 4 of 5 datasets (scifact −0.0445, p=0.003; scidocs −0.0239, p<1e-5). It was neutral on fiqa (+0.0070, p=0.42). It is still above plain BM25 on all 5 datasets, significantly on 4. Plausible reasons (not tested): a small 6-layer model trained only on web passages (MS MARCO) transfers poorly to scientific and biomedical text, while bge-small was trained on far more diverse data. Bigger rerankers are future work.
+- Re-ranking cost: about 120-135 (query, doc) pairs/s on the M2 GPU, so ~0.75 s per query for 100 candidates. Not viable as an online path on this hardware.
+- The t-test implementation matches SciPy on all 5 datasets.
+- Tests: 93 tests, 10/10 consecutive green runs (`results/stage5/test_10x.txt`).

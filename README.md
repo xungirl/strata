@@ -4,7 +4,7 @@
 
 strata is inspired by Lucene/Tantivy (segment architecture, inverted index, block-max WAND) and Qdrant (HNSW), but the engine is our own code: Tantivy shows up only as a comparison baseline in a separate bench crate. The project is built **incrementally over 10 stages**. Every number in this README was measured on one machine; see [BENCHMARK.md](BENCHMARK.md).
 
-> Status: stages 1-4 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid fusion comes in stage 5.
+> Status: stages 1-5 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid retrieval (RRF and weighted fusion, plus a local cross-encoder re-ranker) is evaluated with paired significance tests. The HTTP/gRPC service comes in stage 6.
 
 ---
 
@@ -140,6 +140,30 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 3. *Tie-induced "mismatches" against numpy* (nfcorpus has duplicate documents). Checked: every set mismatch is a tie at rank 10.
 4. *Benchmark hygiene:* embeddings ran on the GPU while CPU benchmarks were held back; all stage-4 timing steps started below load 4.
 
+### Stage 5: Hybrid retrieval (done)
+
+**Goal.** Combine BM25 and dense retrieval, optionally re-rank with a cross-encoder, and find out *with significance tests* when it helps.
+
+**Decisions and alternatives considered.**
+
+| decision | chosen | alternatives | why |
+|---|---|---|---|
+| fusion | RRF (k=60) and weighted min-max / z-score (α=0.5), fixed a priori | tune α/k per dataset; learned fusion | tuning on test queries would inflate results; an α sweep is reported separately as an oracle analysis |
+| missing documents | strictly below the run's lowest normalized score | 0; the run's minimum | lets α=1/α=0 reproduce the input rankings exactly (a bug we hit) |
+| re-ranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` on the RRF top 100, run offline in Python on MPS | ONNX/candle in Rust; bigger models | the cheapest well-known cross-encoder; Rust inference left for later |
+| significance | paired randomization test (100k sign flips) + paired t-test (own Student-t CDF, cross-checked with SciPy) | report means only | trec-covid has 50 queries; differences of 0.01 are often noise |
+
+**Built.** `strata-eval/src/fusion.rs`, `stats.rs`, the `strata-eval hybrid` and `strata-eval compare` subcommands, `scripts/rerank_cross_encoder.py`, `scripts/crosscheck_stats.py`, `scripts/run_stage5.sh`.
+
+**Verified.** Hand-computed RRF and min-max examples; α=1/α=0 reproduce the input rankings exactly; t-distribution reference values (df=10 critical value, Cauchy, normal limit); our t-test equals `scipy.stats.ttest_rel` on all 5 datasets (to 1e-6).
+
+**Measured.** nDCG@10. Best hybrid vs best single retriever: scifact 0.7382 (min-max) vs 0.7127 dense; nfcorpus 0.3638 (RRF) vs 0.3430; trec-covid 0.8051 (z-score) vs 0.7578. On fiqa and scidocs dense alone is best (0.4035, 0.2052). RRF − BM25 is +0.04 to +0.21 (p ≤ 1e-5 everywhere). The MS MARCO cross-encoder *lowered* nDCG@10 versus RRF on 4/5 datasets.
+
+**Problems hit and fixes.**
+1. *α=1 did not reproduce BM25* (nfcorpus 0.2985 vs 0.3202). Single-hit lists normalized to 0 and tied with every non-retrieved doc. Fixed and tested.
+2. *The driver script was edited while bash was executing it*, so bash read a shifted file and failed at the very end. The results of that run were complete. Re-ran the script fully (re-ranking cached) after the fusion fix; lesson recorded.
+3. *A negative result kept as-is*: the re-ranker hurts on these corpora. It was not tuned away or hidden.
+
 ### Key metrics
 
 | metric | value | how measured | source file |
@@ -164,11 +188,14 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 | HNSW vs hnswlib 0.8.0 (same M/efC, 1 thread, ARM) | recall within 0.0125; p50 1.4-6.1x lower; build 2.0-5.0x faster (hnswlib has no ARM SIMD) | `hnswlib_baseline.py` | `results/stage4/hnswlib/`, `reference/hnswlib_simd_macros.txt` |
 | SIMD kernels (384-d dot) | f32 NEON 29.5 ns vs scalar 93.8 ns; int8 auto-vectorized SDOT 8.3 ns vs hand NEON 18.0 ns | microbenchmark, 2M dots | `results/stage4/*.json` |
 | Dense retrieval (bge-small, exact) nDCG@10 | scifact 0.7127, nfcorpus 0.3430, fiqa 0.4035, scidocs 0.2052, trec-covid 0.7578 | `strata-vbench` + `metrics.rs` | `results/stage4/*.json` |
+| Hybrid retrieval nDCG@10 (fixed RRF k=60 / α=0.5) | trec-covid 0.8051 vs dense 0.7578 vs BM25 0.5943; RRF − BM25 +0.04..+0.21 (p ≤ 1e-5, 5/5 datasets); dense alone best on fiqa/scidocs | `strata-eval hybrid`, paired randomization test | `results/stage5/tables.md` |
+| Cross-encoder re-rank (MiniLM-L-6, top 100) | lowered nDCG@10 vs RRF on 4/5 datasets (scifact −0.0445, p=0.003); ~125 pairs/s on MPS | `rerank_cross_encoder.py` | `results/stage5/` |
+| Significance test correctness | paired t-test equals SciPy `ttest_rel` on 5/5 datasets | `crosscheck_stats.py` | `results/stage5/crosscheck/` |
 | Structured queries (k=10 p50) | phrase 157-207 µs, boolean 258-283 µs, prefix 79-804 µs (p99 up to 18.6 ms) | `strata-qbench` | `results/stage3/qbench/` |
 | Tests | 48 tests (unit + proptest vs brute force), 10/10 consecutive passes | `cargo test --workspace` ×10 | `results/test_10x.txt` |
 
 ### Next steps
-Stage 5: hybrid retrieval. Fuse the BM25 and dense runs (RRF, normalized weighted fusion), add an optional local cross-encoder re-ranker, and compare lexical, dense, hybrid and re-ranked nDCG@10 with paired significance tests.
+Stage 6: a single-node service. An axum HTTP API and a tonic gRPC API over the engine (lexical, dense, hybrid), bulk ingest, Prometheus metrics, OpenTelemetry tracing, and our own open- and closed-loop load tester.
 
 ## Architecture
 
@@ -242,6 +269,8 @@ scripts/run_stage3.sh                    # every stage-3 number
 uv run --with sentence-transformers==3.3.1 --with torch python -I scripts/embed_beir.py   # embeddings (once)
 target/release/strata-vbench --dataset fiqa --out results/stage4/fiqa.json
 scripts/run_stage4.sh                    # every stage-4 number
+target/release/strata-eval hybrid --dataset trec-covid --lexical <bm25.trec> --dense <dense.trec>
+scripts/run_stage5.sh                    # every stage-5 number (re-ranking needs uv + torch)
 
 scripts/run_all.sh                       # everything in BENCHMARK.md (9.5 min on this M2)
 python3 -I scripts/make_tables.py        # regenerate the tables from results/*.json
@@ -274,6 +303,7 @@ println!("{} {}", segment.external_id(hits[0].doc), hits[0].score);
 - **Latency numbers are single-machine, single-thread, in-process** (no network, no serialization), on a laptop with heterogeneous cores and background processes. trec-covid has only 50 queries, so its "p99" is simply its maximum.
 - **The Tantivy comparison is not a claim that strata is faster.** Tantivy's index is compressed (4.5–5.1× smaller), it does far more, and we did not profile it. strata's exhaustive scan over raw `u32` postings is cheap on these small corpora. The gap may well reverse at scale or once stage 2 adds compression.
 - Vectors: single-threaded HNSW build; no PQ; filtered ANN switches strategies by a fixed threshold; the vector index is separate from the lexical segments (no shared WAL yet).
+- Hybrid: fusion parameters are fixed, not tuned on dev splits; re-ranking runs offline in Python.
 - MS MARCO and other large BEIR sets were deliberately not run (disk budget).
 
 ## Roadmap
@@ -284,7 +314,7 @@ The project is built incrementally; each stage ends with tests, measured numbers
 - [x] **2. Storage engine:** immutable mmap segments (delta + varint/bitpacked postings, FST term dict), WAL + crash recovery (kill -9 chaos test), background tiered merge, snapshot-isolated readers, deletes via tombstones.
 - [x] **3. Query engine:** WAND / block-max WAND, boolean/phrase/prefix queries, metadata filters, query parser; latency vs exhaustive.
 - [x] **4. Vector index:** own HNSW, SIMD distance, int8 scalar quantization (+ optional product quantization), filtered ANN; recall@10 vs latency curves vs brute force.
-- [ ] **5. Hybrid retrieval:** RRF + weighted/normalized fusion, optional cross-encoder rerank; BEIR nDCG lexical vs dense vs hybrid.
+- [x] **5. Hybrid retrieval:** RRF + weighted/normalized fusion, optional cross-encoder rerank; BEIR nDCG lexical vs dense vs hybrid.
 - [ ] **6. Single-node service:** axum HTTP + gRPC (tonic) API, bulk ingest, Prometheus metrics, OpenTelemetry tracing, own load tester.
 - [ ] **7. Distributed:** sharding (hash by doc id), coordinator scatter-gather top-k merge with global IDF, partial-result timeouts / hedged requests.
 - [ ] **8. Replication:** Raft-replicated WAL per shard (openraft or own), leader failover, read replicas; chaos tests with 0 acknowledged-write loss.
@@ -293,10 +323,10 @@ The project is built incrementally; each stage ends with tests, measured numbers
 
 ## What the next stage should watch out for
 
-- Fusion has knobs (RRF k, weight alpha). Tuning them on the test queries would inflate results. Fix them a priori (k=60, alpha=0.5) and report any sweep separately as an oracle analysis.
-- The two runs have different depths and score scales. Normalize per query, and decide what a document missing from one run scores.
-- Report significance with paired tests over queries. Cross-check the t-test against SciPy.
-- The cross-encoder re-ranker is slow. Re-rank a fixed depth (top 100) and record its time and device.
+- Blocking work (fsync, CPU-heavy search) must not run on the async worker threads.
+- Measure load with an open-loop generator too: closed-loop numbers hide queueing (coordinated omission).
+- The load generator and the server share 8 cores on this laptop. Say so next to every throughput number.
+- Ingest has two durable stores (lexical WAL and vector log). Document the ordering and that it is not one atomic commit.
 
 ## License
 
