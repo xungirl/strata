@@ -187,7 +187,10 @@ struct Repeat {
     analyze_secs: f64,
     index_secs: f64,
     docs_per_sec: f64,
+    /// Latency of the evaluated run (top `--hits`, default 1000).
     latency: LatencyStats,
+    /// Latency of a second pass with k = 10 (a typical "first page" query).
+    latency_k10: LatencyStats,
 }
 
 #[derive(Serialize)]
@@ -199,6 +202,8 @@ struct Summary {
     p99_us_mean: f64,
     p99_us_std: f64,
     qps_mean: f64,
+    p50_us_k10_mean: f64,
+    p99_us_k10_mean: f64,
 }
 
 fn main() -> Result<()> {
@@ -303,16 +308,21 @@ fn run(args: RunArgs) -> Result<()> {
             remove_self_hits,
         );
         let latency = LatencyStats::from_samples(&latencies);
+        let (_, latencies_k10) =
+            run_queries(&ds, &segment, &analyzer, params, 10, remove_self_hits);
+        let latency_k10 = LatencyStats::from_samples(&latencies_k10);
         let index_secs = index_time.as_secs_f64();
         let rep = Repeat {
             analyze_secs,
             index_secs,
             docs_per_sec: ds.corpus.len() as f64 / index_secs,
             latency,
+            latency_k10,
         };
         eprintln!(
-            "[{}] repeat {}: index {:.3}s ({:.0} docs/s, analysis-only {:.3}s), queries p50 {:.0}us p99 {:.0}us",
-            ds.name, r + 1, rep.index_secs, rep.docs_per_sec, rep.analyze_secs, rep.latency.p50_us, rep.latency.p99_us
+            "[{}] repeat {}: index {:.3}s ({:.0} docs/s, analysis-only {:.3}s), queries p50 {:.0}us p99 {:.0}us, k=10 p50 {:.0}us p99 {:.0}us",
+            ds.name, r + 1, rep.index_secs, rep.docs_per_sec, rep.analyze_secs, rep.latency.p50_us, rep.latency.p99_us,
+            rep.latency_k10.p50_us, rep.latency_k10.p99_us
         );
         repeats.push(rep);
 
@@ -347,6 +357,8 @@ fn run(args: RunArgs) -> Result<()> {
     let (p50_m, p50_s) = mean_std(&col(|r| r.latency.p50_us));
     let (p99_m, p99_s) = mean_std(&col(|r| r.latency.p99_us));
     let (qps_m, _) = mean_std(&col(|r| r.latency.qps));
+    let (p50_k10, _) = mean_std(&col(|r| r.latency_k10.p50_us));
+    let (p99_k10, _) = mean_std(&col(|r| r.latency_k10.p99_us));
 
     let report = Report {
         engine: "strata",
@@ -368,6 +380,8 @@ fn run(args: RunArgs) -> Result<()> {
             p99_us_mean: p99_m,
             p99_us_std: p99_s,
             qps_mean: qps_m,
+            p50_us_k10_mean: p50_k10,
+            p99_us_k10_mean: p99_k10,
         },
         unix_time: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -379,9 +393,9 @@ fn run(args: RunArgs) -> Result<()> {
 
     let m = &report.metrics.mean;
     println!(
-        "{}\t{}\tnDCG@10={:.4}\tR@100={:.4}\tR@1000={:.4}\tMRR@10={:.4}\tdocs/s={:.0}±{:.0}\tp50={:.0}us\tp99={:.0}us",
+        "{}\t{}\tnDCG@10={:.4}\tR@100={:.4}\tR@1000={:.4}\tMRR@10={:.4}\tdocs/s={:.0}±{:.0}\tp50={:.0}us\tp99={:.0}us\tk10_p50={:.0}us\tk10_p99={:.0}us",
         ds.name, tag, m.ndcg_at_10, m.recall_at_100, m.recall_at_1000, m.mrr_at_10,
-        dps_m, dps_s, p50_m, p99_m
+        dps_m, dps_s, p50_m, p99_m, p50_k10, p99_k10
     );
     eprintln!("wrote {} and {}", json_path.display(), run_path.display());
     Ok(())
