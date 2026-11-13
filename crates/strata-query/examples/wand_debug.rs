@@ -1,6 +1,6 @@
 //! Print WAND work counters and timings per query vs exhaustive search for
 //! an existing disk index. Diagnostic tool, not part of the benchmarks.
-//! `cargo run --release -p strata-query --example wand_debug -- <index dir> <queries.jsonl> [k]`
+//! `cargo run --release -p strata-query --example wand_debug -- <index dir> <queries.jsonl> [k] [max queries]`
 use std::time::Instant;
 use strata_core::analyzer::{Analyzer, AnalyzerConfig};
 use strata_core::scoring::Bm25Params;
@@ -19,7 +19,8 @@ fn main() -> anyhow::Result<()> {
     )?;
     let snap = index.snapshot();
     let analyzer = Analyzer::new(AnalyzerConfig::english());
-    for line in std::fs::read_to_string(&args[2])?.lines().take(8) {
+    let limit: usize = args.get(4).map_or(usize::MAX, |s| s.parse().unwrap());
+    for line in std::fs::read_to_string(&args[2])?.lines().take(limit) {
         let v: serde_json::Value = serde_json::from_str(line)?;
         let q = Query::bag_of_words(&analyzer, v["text"].as_str().unwrap());
         let terms: Vec<(String, u32)> = q

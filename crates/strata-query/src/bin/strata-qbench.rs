@@ -96,18 +96,29 @@ fn main() -> Result<()> {
         if words.len() >= 2 {
             by_type[1].1.push(format!("\"{} {}\"", words[0], words[1]));
         }
-        if let Some(w) = words.iter().max_by_key(|w| w.len()).filter(|w| w.len() >= 4) {
+        if let Some(w) = words
+            .iter()
+            .max_by_key(|w| w.len())
+            .filter(|w| w.len() >= 4)
+        {
             by_type[2].1.push(format!("{}*", &w[..4]));
         }
         if terms.len() >= 3 {
-            by_type[3].1.push(format!("+{} {} -{}", terms[0], terms[1], terms[2]));
+            by_type[3]
+                .1
+                .push(format!("+{} {} -{}", terms[0], terms[1], terms[2]));
         }
-        by_type[4].1.push(format!("{} bucket:[0 TO 9]", words.join(" ")));
+        by_type[4]
+            .1
+            .push(format!("{} bucket:[0 TO 9]", words.join(" ")));
     }
 
     let mut results = Vec::new();
     for (name, queries) in &by_type {
-        let parsed: Vec<_> = queries.iter().map(|q| parse(q, &analyzer)).collect::<Result<_>>()?;
+        let parsed: Vec<_> = queries
+            .iter()
+            .map(|q| parse(q, &analyzer))
+            .collect::<Result<_>>()?;
         let mut res = TypeResult {
             query_type: name.to_string(),
             queries: parsed.len(),
@@ -129,7 +140,8 @@ fn main() -> Result<()> {
             lat.sort();
             res.p50_us.push(pct(&lat, 50.0));
             res.p99_us.push(pct(&lat, 99.0));
-            res.mean_us.push(lat.iter().sum::<Duration>().as_secs_f64() * 1e6 / lat.len() as f64);
+            res.mean_us
+                .push(lat.iter().sum::<Duration>().as_secs_f64() * 1e6 / lat.len() as f64);
             res.avg_hits = hits as f64 / parsed.len() as f64;
         }
         eprintln!(

@@ -33,8 +33,10 @@ pub use wand::{maxscore_search, wand_search, WandStats};
 /// the boolean executor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Strategy {
-    /// MaxScore pruning (the default: fastest on the BEIR queries, see
-    /// BENCHMARK.md stage 3).
+    /// MaxScore pruning (the default: on this machine it beat exhaustive
+    /// TAAT at k=10 on fiqa, scidocs and trec-covid, 1.1-1.7x, and beat
+    /// block-max WAND everywhere; on the two tiny corpora and at k=1000 it
+    /// can be slower than TAAT, see BENCHMARK.md stage 3).
     Auto,
     /// Block-max WAND pruning.
     BlockMaxWand,
