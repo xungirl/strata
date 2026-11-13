@@ -104,8 +104,8 @@ impl Stemmer {
     }
 
     /// Is `b[i-2..=i]` consonant-vowel-consonant, with the last consonant not
-    /// w, x or y? Used to restore an `e` ("hop" + "ing" -> "hope"? no: cvc
-    /// tells "hop" ends like "hope" would, so "hoping" -> "hope").
+    /// w, x or y? Short CVC stems get their `e` back: "hoping" -> "hop" ->
+    /// "hope", while "hopping" -> "hop" (double consonant rule instead).
     fn cvc(&self, i: isize) -> bool {
         if i < 2 {
             return false;
