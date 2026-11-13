@@ -1159,8 +1159,10 @@ name = "strata-query"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "fst",
  "proptest",
+ "serde",
  "serde_json",
  "strata-core",
  "strata-storage",
