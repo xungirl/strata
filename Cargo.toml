@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/strata-core", "crates/strata-storage", "crates/strata-eval", "crates/strata-bench"]
+members = ["crates/strata-core", "crates/strata-storage", "crates/strata-query", "crates/strata-eval", "crates/strata-bench"]
 
 [workspace.package]
 edition = "2021"

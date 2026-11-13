@@ -1150,6 +1150,19 @@ dependencies = [
  "serde_json",
  "stats_alloc",
  "strata-core",
+ "strata-query",
+ "strata-storage",
+]
+
+[[package]]
+name = "strata-query"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fst",
+ "proptest",
+ "serde_json",
+ "strata-core",
  "strata-storage",
 ]
 
