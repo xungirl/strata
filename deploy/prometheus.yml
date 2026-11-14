@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: strata
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["shard0a:7700", "shard0b:7700", "shard1a:7700", "shard1b:7700"]

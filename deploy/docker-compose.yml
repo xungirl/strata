@@ -1,0 +1,40 @@
+# A 2-shard x 2-replica strata cluster behind a coordinator, plus Prometheus
+# and Grafana. Documented, not run in this repository (see docs/DEPLOY.md).
+#
+#   docker compose -f deploy/docker-compose.yml up --build
+#   curl -XPOST localhost:7800/v1/documents -d '{"docs":[{"id":"1","text":"hello"}]}' -H 'content-type: application/json'
+services:
+  shard0a: &node
+    build: ..
+    command: ["strata-server", "--dir", "/data", "--http", "0.0.0.0:7700"]
+    volumes: ["shard0a:/data"]
+  shard0b:
+    <<: *node
+    volumes: ["shard0b:/data"]
+  shard1a:
+    <<: *node
+    volumes: ["shard1a:/data"]
+  shard1b:
+    <<: *node
+    volumes: ["shard1b:/data"]
+  coord:
+    build: ..
+    command:
+      - strata-coord
+      - --listen=0.0.0.0:7800
+      - --shards=http://shard0a:7700,http://shard0b:7700;http://shard1a:7700,http://shard1b:7700
+      - --timeout-ms=1000
+      - --hedge-ms=15
+    ports: ["7800:7800"]
+    depends_on: [shard0a, shard0b, shard1a, shard1b]
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes: ["./prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    ports: ["9090:9090"]
+  grafana:
+    image: grafana/grafana:11.1.0
+    volumes:
+      - ./grafana/strata-dashboard.json:/var/lib/grafana/dashboards/strata.json:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports: ["3000:3000"]
+volumes: { shard0a: {}, shard0b: {}, shard1a: {}, shard1b: {} }

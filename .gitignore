@@ -6,3 +6,4 @@
 /results/tmp/
 /.wt
 /results/**/runs/
+__pycache__/
