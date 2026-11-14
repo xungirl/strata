@@ -864,3 +864,89 @@ What the chaos client (`strata-raft-chaos`) does:
   - `results/stage8/superseded_v2/`: failover was measured to the first ack *after* the kill, which could be the dead leader's last response. That gave impossible 10-30 ms failovers.
 - **Not tested:** power loss (only process kills; macOS `fsync` is not `F_FULLFSYNC`), network partitions in the real cluster (only in simulation), membership changes, snapshots/log compaction, a negative control for the real-cluster harness (the negative controls here are the simulation mutations; stage 2 has one for the storage engine).
 - Tests: 104 tests, 10/10 consecutive green runs (`results/stage8/test_10x.txt`); clippy -D warnings + fmt clean.
+
+# Stage 9: agent integration (MCP server, agent memory on LoCoMo)
+
+Measured by `scripts/run_stage9.sh`; tables rendered by `scripts/make_tables_stage9.py` (`results/stage9/tables.md`). **No LLM was called anywhere in this stage**: the evaluation measures what strata controls, which is whether the memory system returns the turns that contain the answer.
+
+**Dataset.** LoCoMo (Maharana et al., 2024; <https://github.com/snap-research/locomo>; CC BY-NC 4.0, kept in `data/`, not redistributed). It has 10 long multi-session conversations, and every question lists the dialogue turns ("evidence") that contain its answer.
+- `scripts/locomo_to_beir.py` turns every dialogue turn into one memory (`<date> <speaker>: <text>`, tagged with its conversation): 5,882 memories.
+- Every question with resolvable evidence becomes a query, with its evidence turns as relevant documents: 1,532 questions and 2,347 evidence links. Adversarial (category 5) questions are left out.
+
+**Protocol.** `scripts/mcp_locomo_eval.py` is an independent stdlib-Python MCP client speaking newline-delimited JSON-RPC 2.0 over the server's stdio (`initialize` → `notifications/initialized` → `tools/list` → `tools/call`).
+- It stores all memories with `remember_many`, then calls `recall(question, k=100, tag_key="conv", tag_value=<the question's conversation>)` for every question, as an agent would.
+- `results/stage9/mcp_transcript.jsonl` holds the first 40 protocol messages, with dataset text replaced by its length.
+- The ranked results are deterministic: the 3 repeats produced identical run files (`mcp_determinism.txt`).
+- Comparison points: BM25 without the tag filter (`strata-eval run`); exact dense retrieval with bge-small-en-v1.5 (numpy brute force, with and without the filter; `scripts/locomo_dense_runs.py`); and fusion of the MCP BM25 run with the filtered dense run (`strata-eval hybrid`, the stage-5 code).
+
+```
+date: 2026-11-14T06:47:20Z
+git: 9565ab5 (dirty: strata-mcp was not yet committed; committed right after as aad02a5)
+MCP latency repeats gated on load < 4 (3.77-3.78, results/stage9/load.log)
+```
+
+### Agent memory over MCP (LoCoMo, 10 conversations, 5,882 dialogue turns as memories, 1,532 questions)
+
+MCP server `strata-mcp` 0.1.0 (built on the official Rust SDK `rmcp` 3.10.0; protocol 2025-06-18), driven over stdio by an independent stdlib-Python JSON-RPC client. Tools listed: `forget`, `memory_stats`, `recall`, `remember`, `remember_many`, `search`.
+
+Mean ± std over 3 fresh runs.
+
+| measurement | value |
+|---|---|
+| memories stored (12 `remember_many` calls of ≤ 500, each fsynced + committed) | 5882 |
+| time to store all memories, s | 0.82 ± 0.06 |
+| `recall` latency p50 ms (client-side, incl. JSON-RPC over pipes) | 0.437 ± 0.006 |
+| `recall` latency p99 ms | 0.984 ± 0.046 |
+| `recall` latency max ms | 3.0 ± 0.9 |
+
+### Retrieval of the gold evidence turns (all 1,532 questions)
+
+| system | nDCG@10 | R@100 | MRR@10 |
+|---|---|---|---|
+| BM25, all memories (no tag filter) | 0.4566 | 0.7533 | 0.4445 |
+| BM25 via MCP `recall`, tag filter conv (top 100) | 0.4942 | 0.8055 | 0.4806 |
+| dense bge-small exact, all memories | 0.4374 | 0.8553 | 0.4175 |
+| dense bge-small exact, tag filter conv | 0.4506 | 0.8727 | 0.4280 |
+| hybrid RRF k=60 (MCP BM25 + dense conv) | 0.5041 | 0.8903 | 0.4871 |
+| hybrid min-max α=0.5 (MCP BM25 + dense conv) | 0.5337 | 0.9013 | 0.5163 |
+
+### nDCG@10 by LoCoMo question category (category numbers as in the dataset file)
+
+| system | cat 1 (n=282) | cat 2 (n=320) | cat 3 (n=89) | cat 4 (n=841) |
+|---|---|---|---|---|
+| BM25, all memories (no tag filter) | 0.2322 | 0.5456 | 0.2105 | 0.5241 |
+| BM25 via MCP `recall`, tag filter conv (top 100) | 0.2826 | 0.5854 | 0.2429 | 0.5571 |
+| dense bge-small exact, all memories | 0.2935 | 0.5322 | 0.2457 | 0.4698 |
+| dense bge-small exact, tag filter conv | 0.3150 | 0.5381 | 0.2696 | 0.4819 |
+| hybrid RRF k=60 (MCP BM25 + dense conv) | 0.3434 | 0.5901 | 0.2634 | 0.5507 |
+| hybrid min-max α=0.5 (MCP BM25 + dense conv) | 0.3335 | 0.6133 | 0.2786 | 0.5975 |
+
+### Paired significance (randomization test, 100,000 samples)
+
+| comparison | metric | mean A | mean B | diff | p (randomization) | p (t-test) |
+|---|---|---|---|---|---|---|
+| tag filter, BM25 (A = all, B = conv) | ndcg_at_10 | 0.4566 | 0.4942 | +0.0376 | 1e-05 | 6.4e-41 |
+| tag filter, BM25 (A = all, B = conv) | recall_at_100 | 0.7533 | 0.8055 | +0.0522 | 1e-05 | 1.8e-24 |
+| tag filter, dense (A = all, B = conv) | ndcg_at_10 | 0.4374 | 0.4506 | +0.0132 | 1e-05 | 2.1e-13 |
+| tag filter, dense (A = all, B = conv) | recall_at_100 | 0.8553 | 0.8727 | +0.0173 | 1e-05 | 2e-09 |
+| dense vs lexical (A = second) | ndcg_at_10 | 0.4942 | 0.4506 | -0.0436 | 4e-05 | 2.1e-05 |
+| dense vs lexical (A = second) | recall_at_100 | 0.8055 | 0.8727 | +0.0672 | 1e-05 | 2.5e-12 |
+| rrf-k60 vs lexical (A = second) | ndcg_at_10 | 0.4942 | 0.5041 | +0.0099 | 0.14 | 0.14 |
+| rrf-k60 vs lexical (A = second) | recall_at_100 | 0.8055 | 0.8903 | +0.0848 | 1e-05 | 2.5e-35 |
+| minmax-a0.5 vs lexical (A = second) | ndcg_at_10 | 0.4942 | 0.5337 | +0.0394 | 1e-05 | 2.6e-25 |
+| minmax-a0.5 vs lexical (A = second) | recall_at_100 | 0.8055 | 0.9013 | +0.0959 | 1e-05 | 5.2e-35 |
+| minmax-a0.5 vs dense (A = second) | ndcg_at_10 | 0.4506 | 0.5337 | +0.0830 | 1e-05 | 3.9e-20 |
+| minmax-a0.5 vs dense (A = second) | recall_at_100 | 0.8727 | 0.9013 | +0.0286 | 1e-05 | 2.3e-07 |
+
+## Reading the numbers
+
+- **The tag filter matters.** Restricting recall to the conversation the question is about (an exact keyword filter, stage 3) raises BM25 nDCG@10 from 0.4566 to 0.4942 and R@100 from 0.753 to 0.806 (p < 1e-5). Without it, turns from other people's conversations with the same words compete.
+- **BM25 vs dense on agent memory.**
+  - The two have different strengths: BM25 has the better top of the list (nDCG@10 0.494 vs 0.451), while dense finds more of the evidence in the top 100 (R@100 0.873 vs 0.806). Both differences are significant.
+  - Fusion at the stage-5 default α=0.5 (min-max) is best on both: nDCG@10 0.534 (+0.039 over BM25) and R@100 0.901 (+0.096).
+  - RRF raises R@100 but not nDCG@10 significantly (p = 0.14).
+  - The `hybrid` output also contains an α sweep. Its best value (α=0.3, nDCG@10 0.5475) is tuned **on the test questions**, so it is not reported as a result.
+- **By category.** Categories 1 and 3 (numbers as in the dataset file) are much harder for every system (nDCG@10 0.23-0.34) than categories 2 and 4 (0.53-0.61). This pattern fits questions whose evidence is spread over several turns and that need inference rather than word overlap, but the category meanings were not verified here. Dense retrieval and fusion help most on categories 1 and 3.
+- **Latency.** A `recall` round trip through the MCP server, measured at the client (JSON-RPC over pipes, BM25 with filter, ≈ 600 memories per conversation), is 0.44 ms at p50 and 0.98 ms at p99. Storing all 5,882 memories takes 0.82 s, including one fsync + commit per `remember_many` call.
+- **Not measured:** end-to-end answer accuracy of an LLM agent using these memories (that needs an LLM and a judge; deliberately not done), dense/hybrid recall *inside* the MCP server (the server is lexical only; dense and hybrid here are offline comparisons), concurrency.
+- Tests: 105 tests, 10/10 consecutive green runs (`results/stage9/test_10x.txt`); clippy -D warnings + fmt clean.

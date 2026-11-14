@@ -965,3 +965,54 @@ client ─POST /v1/documents─► leader: propose(cmd) → 日志追加
 **Q6. 故障转移时间由什么决定？** 选举超时（150-300 ms）+ 一轮投票 + 一次提交。实测 p50 261 ms、p90 448 ms、最大 782 ms；尾巴可能是平票需要再等一轮超时（没有专门测量确认）。缩短办法：更短的超时（误判风险更大）、pre-vote、主动 leadership transfer。
 **Q7. 节点重启后怎么恢复？** 从 Raft 日志重建索引：commit index 从 0 开始，leader 告诉它真正的 commit，applier 重放。没有快照所以时间随日志增长（这里 p50 257 ms）。生产需要定期快照 + 截断日志。
 **Q8. 你怎么知道测试能抓到 bug？** 变异测试：注入 6 个已知 bug（Figure 8、投票检查、重复投票、过期 ReadIndex、不经多数派的读、follower 越界提交），6/6 被抓。还保留了两次被推翻的混沌测试结果和原因——证明数字是可信的过程比数字本身更重要。
+
+---
+
+# Stage 9：智能体集成（MCP 记忆服务器）
+
+> 新文件：`crates/strata-server/src/bin/strata-mcp.rs`、`crates/strata-server/tests/mcp_tests.rs`、`scripts/locomo_to_beir.py`、`scripts/mcp_locomo_eval.py`、`scripts/locomo_dense_runs.py`、`scripts/run_stage9.sh`、`scripts/make_tables_stage9.py`。
+> 教学顺序：`strata-mcp.rs → mcp_tests.rs → locomo_to_beir.py → mcp_locomo_eval.py`
+
+## 全局图
+
+```
+LLM 智能体（Claude Code / Desktop …）
+   │ 启动子进程，stdin/stdout 上逐行 JSON-RPC 2.0（MCP stdio 传输）
+   ▼
+strata-mcp ── initialize / tools/list / tools/call
+   ├─ remember / remember_many → memories.jsonl（fsync，存原文）→ Engine.ingest + commit（WAL fsync）
+   ├─ recall(question, tag) → 纯词袋 BM25 + KeywordEq 标签过滤 → 返回原文 + 分数
+   ├─ search(query language) / forget / memory_stats
+   └─ 日志只写 stderr（stdout 是协议通道）
+```
+
+## 1. `strata-mcp.rs`
+**(a)** 用官方 Rust SDK `rmcp`：`#[tool_router]` 宏把带 `#[tool(description=...)]` 的方法注册成工具，参数结构体 `#[derive(JsonSchema)]` 自动生成输入 schema，返回 `Json<T>` 生成结构化输出；`#[tool_handler(router = self.tool_router)]` 实现 `ServerHandler`；`serve(stdio())` 开始服务。
+**(b)**
+- 为什么 MCP：智能体框架通用的工具协议，写一次所有支持 MCP 的客户端都能用；stdio 传输最简单（客户端负责启动进程，无端口、无鉴权问题）。
+- 为什么分 `recall` 和 `search`：模型按描述选工具。`recall` 接受自然语言问题（不解析查询语法，标点不会报错）+ 标签过滤；`search` 暴露完整查询语言给需要精确控制的场景。
+- 原文单独存 `memories.jsonl`：索引只存词项和字段；先写原文再写索引，保证召回到的 id 一定有原文。
+- 标签 = 关键词字段：`user`、`session`、`conv` 等，用第三阶段的精确过滤实现「只在这个用户的记忆里找」。
+**(c)** `Parameters<T>` 包装器解析参数；`ErrorData::internal_error`；`std::slice::from_ref` 把单个元素变成切片。
+
+## 2. `mcp_tests.rs`
+**(a)** 用 `env!("CARGO_BIN_EXE_strata-mcp")` 启动真实二进制，走真实协议：握手、列工具、每个工具调一遍、标签过滤、删除、重启后数据还在、stdout 每一行都是 JSON-RPC。
+**(b)** stdio 服务器最常见的 bug 是往 stdout 打日志把协议弄坏——测试逐行检查。
+**(c)** `BufReader::read_line`；`serde_json::json!` 宏。
+
+## 3. LoCoMo 评测（`locomo_to_beir.py`、`mcp_locomo_eval.py`）
+**(a)** 每个对话轮次一条记忆（带对话标签），每个问题的「证据轮次」作为相关文档，转换成 BEIR 格式，于是可以直接用第一阶段的评测工具（nDCG、Recall、显著性检验）。客户端是独立的 Python 标准库实现。
+**(b)**
+- 为什么测「证据召回」而不是「答案正确率」：答案正确率还取决于 LLM 和评判器，噪声大、要 key 和预算；strata 能负责的是把含答案的轮次找回来。
+- 数据许可：LoCoMo 是 CC BY-NC 4.0，只在本地 `data/` 用，结果里的协议记录把原文替换成长度，git 历史里也没有原文。
+**(c)** `subprocess.Popen(..., text=True, bufsize=1)` 行缓冲管道。
+
+## Stage 9 面试问答
+**Q1. MCP 是什么？和 function calling 什么关系？** 一个开放协议：服务器声明工具（名字、描述、JSON schema），客户端（智能体宿主）把工具交给模型，模型决定调用，客户端转发给服务器。function calling 是模型能力，MCP 是把工具接到任意宿主的标准接口。
+**Q2. 结果怎么样？** LoCoMo 1,532 个问题：MCP `recall`（BM25 + 对话标签过滤）nDCG@10 0.494、R@100 0.806；不加过滤 0.457 / 0.753；bge-small 稠密检索 0.451 / 0.873；混合（min-max α=0.5）0.534 / 0.901。
+**Q3. 为什么稠密检索 nDCG 低但召回高？** BM25 对人名、地点等精确词汇匹配很准，排在最前面；稠密向量能找到换了说法的轮次，所以前 100 名里证据更全。两者互补，所以融合两项都最好。
+**Q4. 为什么不报告 α 扫描里最好的 0.5475？** 那是在测试问题上调出来的（相当于偷看答案），只报告事先固定的 α=0.5。
+**Q5. 标签过滤为什么提升这么大？** 不同对话里有相同的词（「画画」「孩子」），不过滤时别人的对话会混进来。智能体记忆里按用户/会话隔离既是正确性也是隐私要求。
+**Q6. 延迟？** 客户端测量的一次 `recall`（含 JSON-RPC 和管道）p50 0.44 ms、p99 0.98 ms，3 次重复方差很小。对 LLM 智能体来说可以忽略（一次模型调用是秒级）。
+**Q7. 局限？** MCP 服务器只有词法检索（稠密/混合是离线对比）；没有测 LLM 端到端答题；LoCoMo 只有 10 段对话；类别含义没有核实，只按编号报告。
+**Q8. 如果要用 LLM，你怎么处理密钥和成本？** 运行时从固定文件读取、绝不写进仓库和日志、设调用上限、测试用假 provider——这一阶段干脆完全没用 LLM。

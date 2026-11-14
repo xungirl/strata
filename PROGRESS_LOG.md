@@ -47,3 +47,9 @@
 - Headline: own Raft (pure state machine); 75 leader SIGKILLs, 53,130 acked ids, 0 lost; 0/3,750 consistent reads on the new leader missed a pre-kill ack (`results/stage8/chaos.*.json`).
 - Headline: failover p50 261 ms / p90 448 ms / max 782 ms (n=75, election timeout 150-300 ms); simulation catches 6/6 injected Raft bugs (`results/stage8/tables.md`, `mutations.txt`).
 - Caveats: one laptop, process kills only (partitions only in simulation); no snapshots/compaction, membership changes or pre-vote; Raft shard not yet behind the stage-7 coordinator; two superseded chaos runs (harness bugs) kept with explanations.
+
+## Stage 9: Agent integration (tag `stage-9`)
+- Tests: 105 tests, 10/10 consecutive green runs (`results/stage9/test_10x.txt`); clippy -D warnings + fmt clean.
+- Headline: `strata-mcp` (rmcp 3.10, stdio) with remember/remember_many/recall/search/forget/memory_stats; end-to-end test over the real JSON-RPC transport incl. restart durability.
+- Headline: LoCoMo evidence retrieval (1,532 questions): MCP recall nDCG@10 0.494 / R@100 0.806; tag filter +0.038 nDCG@10 (p<1e-5); hybrid with bge-small 0.534 / 0.901; recall p50 0.44 ms (`results/stage9/tables.md`).
+- Caveats: no LLM used (evidence recall, not answer accuracy); MCP server lexical only (dense/hybrid offline); α sweep is test-tuned and not reported; LoCoMo CC BY-NC kept local, transcript redacted.

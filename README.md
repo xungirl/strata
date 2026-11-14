@@ -4,7 +4,7 @@
 
 strata is inspired by Lucene/Tantivy (segment architecture, inverted index, block-max WAND) and Qdrant (HNSW), but the engine is our own code: Tantivy shows up only as a comparison baseline in a separate bench crate. The project is built **incrementally over 10 stages**. Every number in this README was measured on one machine; see [BENCHMARK.md](BENCHMARK.md).
 
-> Status: stages 1-8 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid retrieval (RRF and weighted fusion, plus a local cross-encoder re-ranker) is evaluated with paired significance tests. It runs as a service: HTTP + gRPC, Prometheus metrics, OpenTelemetry spans, and its own open- and closed-loop load generator. Stage 7 shards it behind a coordinator (two-phase scatter-gather with global IDF, verified equal to single node on BEIR; deadlines, partial results, hedged requests). Stage 8 replicates a shard with its own Raft implementation (simulation-tested, 0 acknowledged-write loss over 75 leader kills). The MCP agent integration comes in stage 9.
+> Status: stages 1-9 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid retrieval (RRF and weighted fusion, plus a local cross-encoder re-ranker) is evaluated with paired significance tests. It runs as a service: HTTP + gRPC, Prometheus metrics, OpenTelemetry spans, and its own open- and closed-loop load generator. Stage 7 shards it behind a coordinator (two-phase scatter-gather with global IDF, verified equal to single node on BEIR; deadlines, partial results, hedged requests). Stage 8 replicates a shard with its own Raft implementation (simulation-tested, 0 acknowledged-write loss over 75 leader kills). Stage 9 exposes it to LLM agents as an MCP memory server, evaluated on the LoCoMo agent-memory benchmark. Stage 10 adds ops material (Docker, dashboards, capacity report, architecture doc).
 
 ---
 
@@ -269,6 +269,41 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
    Both were fixed, and the superseded runs are kept with explanations.
 5. *The simulation first missed 3 of 6 injected bugs.* Partitions were made longer and batch sizes varied, and a Figure-8 replay test was added.
 
+### Stage 9: Agent integration (done)
+
+**Goal.** Make strata usable by LLM agents as long-term memory through the Model Context Protocol, and measure retrieval quality on a real agent-memory benchmark.
+
+**Decisions and alternatives considered.**
+
+| decision | chosen | alternatives | why |
+|---|---|---|---|
+| protocol | MCP over stdio via the official Rust SDK `rmcp` 3.10 (`#[tool_router]`, structured JSON output with schemas) | hand-written JSON-RPC; HTTP transport | spec-compliant handshake and schemas for free; stdio is what desktop agents launch |
+| tools | `remember`, `remember_many`, `recall` (plain question + tag filter), `search` (query language), `forget`, `memory_stats` | a single generic `query` tool | agents pick tools by description; `recall` hides query syntax, while `search` exposes it for power use |
+| memory text | append-only, fsynced `memories.jsonl` next to the index | store text in the index | the index stores only terms and fields; hits return their text |
+| evaluation | LoCoMo evidence retrieval (does recall return the turns that hold the answer?), scored with the BEIR harness | LLM answer accuracy with an LLM judge | measures what strata controls; needs no LLM, key or budget |
+| client | an independent stdlib-Python MCP client | the server's own SDK | tests the wire protocol, not the SDK against itself |
+
+**Built.**
+- Binary `strata-mcp`, plus an end-to-end test that drives the real binary over JSON-RPC (handshake, every tool, tag filter, restart durability, stdout purity).
+- Scripts: `locomo_to_beir.py`, `mcp_locomo_eval.py`, `locomo_dense_runs.py`, `run_stage9.sh`, `make_tables_stage9.py`.
+
+**Measured** (LoCoMo: 5,882 dialogue turns as memories, 1,532 questions):
+- `recall` over MCP (BM25 + conversation tag filter): nDCG@10 0.494, R@100 0.806.
+- Without the tag filter: 0.457 / 0.753.
+- Exact bge-small dense: 0.451 / 0.873.
+- Hybrid min-max α=0.5: **0.534 / 0.901**. All differences are significant except RRF's nDCG@10.
+- `recall` round trip p50 0.44 ms, p99 0.98 ms.
+
+**Problems hit and fixes.**
+1. *The rmcp handler rebuilt its tool router on every call* by default (the stored router was unused; the compiler warned). It now uses `#[tool_handler(router = self.tool_router)]`.
+2. *The protocol transcript contained dataset text.* LoCoMo is non-commercial and must not be redistributed, so the transcript now keeps message shapes and lengths only (and the history was rewritten before anything was shared).
+
+Use it from an MCP client (for example Claude Code or Claude Desktop):
+
+```json
+{ "mcpServers": { "strata-memory": { "command": "/path/to/target/release/strata-mcp", "args": ["--dir", "/path/to/memory-dir"] } } }
+```
+
 ### Key metrics
 
 | metric | value | how measured | source file |
@@ -305,10 +340,12 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 | Raft chaos (3 replicas, SIGKILL the leader) | 75 kills, 53,130 acked ids, **0 lost**; 0/3,750 consistent reads on the new leader missed a pre-kill ack | `strata-raft-chaos`, 3 runs × 25 | `results/stage8/chaos.*.json` |
 | Raft failover (election timeout 150-300 ms) | p50 261 ms, p90 448 ms, max 782 ms (n=75); per-run p50 251 ± 18 ms | same | `results/stage8/tables.md` |
 | Raft simulation sensitivity | 6/6 injected bugs (Figure 8, vote checks, ReadIndex, follower commit) detected | `scripts/raft_mutations.sh` | `results/stage8/mutations.txt` |
-| Tests | 104 tests (unit + proptest vs brute force / single index, end-to-end API tests, Raft simulation), 10/10 consecutive passes at stage 8 | `cargo test --workspace` ×10 | `results/stage8/test_10x.txt` (earlier stages: `results/stage*/test_10x.txt`) |
+| Agent memory over MCP (LoCoMo, 1,532 questions) | `recall` (BM25 + tag filter) nDCG@10 0.494 / R@100 0.806; hybrid with bge-small 0.534 / 0.901; tag filter +0.038 nDCG@10 (p < 1e-5) | `mcp_locomo_eval.py` + `strata-eval` | `results/stage9/tables.md` |
+| MCP `recall` latency (client-side, stdio) | p50 0.437 ± 0.006 ms, p99 0.98 ± 0.05 ms | 3 runs × 1,532 calls | `results/stage9/mcp.r*/mcp_eval.json` |
+| Tests | 105 tests (unit + proptest vs brute force / single index, end-to-end API and MCP tests, Raft simulation), 10/10 consecutive passes at stage 9 | `cargo test --workspace` ×10 | `results/stage9/test_10x.txt` (earlier stages: `results/stage*/test_10x.txt`) |
 
 ### Next steps
-Stage 9: agent integration. An MCP server exposing remember/recall/search/forget tools over strata, an agent-memory demo, and a retrieval evaluation on an agent-memory benchmark (LoCoMo).
+Stage 10: ops and polish. A Dockerfile and compose file (documented; running them is not required), a Grafana dashboard for the Prometheus metrics, a capacity/performance report built only from measured numbers, and docs/ARCHITECTURE.md.
 
 ## Architecture
 
@@ -393,6 +430,9 @@ target/release/strata-server --dir data/s0 --http 127.0.0.1:7711 &
 target/release/strata-server --dir data/s1 --http 127.0.0.1:7712 &
 target/release/strata-coord --listen 127.0.0.1:7800 --shards "http://127.0.0.1:7711;http://127.0.0.1:7712" --timeout-ms 1000 --hedge-ms 5
 scripts/run_stage7.sh                    # every stage-7 number
+scripts/run_stage8.sh                    # Raft chaos (3 x 25 leader kills)
+scripts/raft_mutations.sh                # inject 6 Raft bugs, expect the simulation to catch them
+scripts/run_stage9.sh                    # MCP agent memory on LoCoMo (needs data/locomo/locomo10.json)
 
 scripts/run_all.sh                       # everything in BENCHMARK.md (9.5 min on this M2)
 python3 -I scripts/make_tables.py        # regenerate the tables from results/*.json
@@ -429,6 +469,7 @@ println!("{} {}", segment.external_id(hits[0].doc), hits[0].score);
 - Service: no auth, rate limiting or backpressure; lexical WAL and vector log are two separate fsyncs (not one atomic commit); HNSW is rebuilt on start; load generator and server share the machine.
 - Distributed: all shards on one laptop (no real network or machine failures); replicas kept in sync by the coordinator writing to all of them (no consensus until stage 8); no rebalancing; hedging has no budget/limit; dense/hybrid merge across shards is exact only for exact vector search.
 - Replication: Raft has no log compaction or snapshots (restart replays the whole log; the log grows forever), no membership changes, no pre-vote; the Raft shard is a separate binary not yet wired behind the stage-7 coordinator; only process kills were tested in the real cluster (partitions only in simulation); macOS fsync is not `F_FULLFSYNC`; linearizability is checked with targeted read checks, not a full history checker.
+- Agent memory: the MCP server is lexical only (dense/hybrid results on LoCoMo are offline comparisons); one process per memory directory; no LLM-in-the-loop answer accuracy measured; LoCoMo has only 10 conversations, and the category meanings were not verified.
 - MS MARCO and other large BEIR sets were deliberately not run (disk budget).
 
 ## Roadmap
@@ -443,15 +484,14 @@ The project is built incrementally; each stage ends with tests, measured numbers
 - [x] **6. Single-node service:** axum HTTP + gRPC (tonic) API, bulk ingest, Prometheus metrics, OpenTelemetry tracing, own load tester.
 - [x] **7. Distributed:** sharding (hash by doc id), coordinator scatter-gather top-k merge with global IDF, partial-result timeouts / hedged requests.
 - [x] **8. Replication:** Raft-replicated WAL per shard (openraft or own), leader failover, read replicas; chaos tests with 0 acknowledged-write loss.
-- [ ] **9. Agent integration:** MCP server (search/ingest tools), agent memory use-case demo, eval of retrieval quality on agent tasks.
+- [x] **9. Agent integration:** MCP server (search/ingest tools), agent memory use-case demo, eval of retrieval quality on agent tasks.
 - [ ] **10. Ops & polish:** Docker/compose files (documented, not required to run), dashboards, capacity/perf report, architecture doc.
 
 ## What the next stage should watch out for
 
-- MCP over stdio: stdout is the protocol channel, so every log line must go to stderr.
-- Agent-memory evaluation needs a public dataset with ground-truth evidence (LoCoMo has evidence dialogue ids per question); check its license and keep it out of the repo.
-- No LLM calls unless necessary. If one is used, read the key at runtime only, never log it, cap the number of calls, and keep a fake provider for tests.
-- Report recall of the gold evidence, not just "it answers": retrieval quality is what strata controls.
+- A capacity report may only combine measured numbers. Label every extrapolation as arithmetic, with its assumptions, and keep it separate from measurements.
+- The Docker/compose files cannot be run here (Docker isn't used on this machine for this project). Say clearly that they are untested.
+- Dashboard queries must match the metric names the server actually exports (check `/metrics` output in `results/stage6/metrics_after_load.txt`).
 
 ## License
 
