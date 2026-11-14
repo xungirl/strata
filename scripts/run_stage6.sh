@@ -30,18 +30,22 @@ start_server() {
   echo "server did not start"; exit 1
 }
 
+# OPEN_ONLY=1: one ingest, then only the open-loop runs (used to re-measure
+# open loop after fixing the generator's scheduling precision).
+REPS=3; [ "${OPEN_ONLY:-0}" = 1 ] && REPS=1
 # 1. Bulk ingest (3 repeats, fresh node each time).
-for r in 1 2 3; do
+for r in $(seq 1 $REPS); do
   start_server
   wait_for_quiet "ingest repeat $r"
-  $LOAD ingest --url http://127.0.0.1:$PORT --dataset $DS --batch 500 --concurrency 4 --embeddings --out $S/load/ingest.$r.json
-  [ $r -lt 3 ] && { kill $SRV_PID; wait $SRV_PID 2>/dev/null || true; }
+  out=$S/load/ingest.$r.json; [ "${OPEN_ONLY:-0}" = 1 ] && out=$S/logs/ingest.openloop-rerun.json
+  $LOAD ingest --url http://127.0.0.1:$PORT --dataset $DS --batch 500 --concurrency 4 --embeddings --out $out
+  [ $r -lt $REPS ] && { kill $SRV_PID; wait $SRV_PID 2>/dev/null || true; }
 done
 
 # 2. Search load on the last node (all docs committed, merges finished).
 sleep 5
-curl -s http://127.0.0.1:$PORT/metrics > $S/metrics_after_ingest.txt
-for mode in lexical hybrid; do
+[ "${OPEN_ONLY:-0}" = 1 ] || curl -s http://127.0.0.1:$PORT/metrics > $S/metrics_after_ingest.txt
+[ "${OPEN_ONLY:-0}" = 1 ] || for mode in lexical hybrid; do
   for c in 1 4 16 64; do
     for r in 1 2 3; do
       wait_for_quiet "closed $mode c=$c r=$r"
@@ -60,6 +64,7 @@ for rate in 500 1000 2000 4000; do
 done
 curl -s http://127.0.0.1:$PORT/metrics > $S/metrics_after_load.txt
 kill $SRV_PID; wait $SRV_PID 2>/dev/null || true
+[ "${OPEN_ONLY:-0}" = 1 ] && exit 0
 
 # 3. Tracing: one search with the stdout span exporter, to show spans exist.
 rm -rf data/stage6-trace

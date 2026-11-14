@@ -70,6 +70,20 @@ enum Cmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Run every BEIR test query once (plain bag-of-words, top `k`, self-hits
+    /// dropped) and write a TREC run file, to compare against single-node runs.
+    RunQueries {
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        dataset: String,
+        #[arg(long, default_value = "data")]
+        data_dir: PathBuf,
+        #[arg(long, default_value_t = 1000)]
+        k: usize,
+        #[arg(long)]
+        out: PathBuf,
+    },
     Ingest {
         #[arg(long)]
         url: String,
@@ -187,6 +201,7 @@ async fn main() -> Result<()> {
             let start = Instant::now();
             let measure_from = start + Duration::from_secs_f64(warmup);
             let end = measure_from + Duration::from_secs_f64(duration);
+            let mut send_lags: Vec<Duration> = Vec::new();
             let (lat, errors) = match r#loop {
                 Loop::Closed => {
                     let next = Arc::new(AtomicUsize::new(0));
@@ -222,31 +237,54 @@ async fn main() -> Result<()> {
                     (all, errors)
                 }
                 Loop::Open => {
+                    // The schedule runs on its own OS thread so that spinning
+                    // to the exact send instant never blocks the async worker
+                    // threads that process responses. tokio timers have ~1 ms
+                    // granularity, hence: sleep until shortly before the slot,
+                    // then spin. Each request is spawned onto the runtime at
+                    // its slot; latency is measured from the slot.
                     let interval = Duration::from_secs_f64(1.0 / rate);
-                    let mut handles = Vec::new();
-                    let mut i = 0usize;
-                    loop {
-                        let scheduled = start + interval * i as u32;
-                        if scheduled >= end {
-                            break;
+                    let rt = tokio::runtime::Handle::current();
+                    let scheduler = std::thread::spawn(move || {
+                        let mut handles = Vec::new();
+                        let mut i = 0usize;
+                        loop {
+                            let scheduled = start + interval * i as u32;
+                            if scheduled >= end {
+                                break;
+                            }
+                            let now = Instant::now();
+                            if scheduled > now + Duration::from_micros(500) {
+                                std::thread::sleep(scheduled - now - Duration::from_micros(500));
+                            }
+                            while Instant::now() < scheduled {
+                                std::hint::spin_loop();
+                            }
+                            let (client, endpoint, body) =
+                                (client.clone(), endpoint.clone(), body.clone());
+                            handles.push(rt.spawn(async move {
+                                let sent = Instant::now();
+                                let ok = matches!(client.post(&endpoint).json(&body(i)).send().await, Ok(r) if r.status().is_success());
+                                // Latency from the *scheduled* time (no coordinated
+                                // omission); the send lag shows generator accuracy.
+                                (scheduled, scheduled.elapsed(), sent - scheduled, ok)
+                            }));
+                            i += 1;
                         }
-                        tokio::time::sleep_until(scheduled.into()).await;
-                        let (client, endpoint, body) =
-                            (client.clone(), endpoint.clone(), body.clone());
-                        handles.push(tokio::spawn(async move {
-                            let ok = matches!(client.post(&endpoint).json(&body(i)).send().await, Ok(r) if r.status().is_success());
-                            // Latency from the *scheduled* time (no coordinated omission).
-                            (scheduled, scheduled.elapsed(), ok)
-                        }));
-                        i += 1;
-                    }
+                        handles
+                    });
+                    let handles = tokio::task::spawn_blocking(move || {
+                        scheduler.join().expect("scheduler thread")
+                    })
+                    .await?;
                     let mut all = Vec::new();
                     let mut errors = 0;
                     for h in handles {
-                        let (scheduled, d, ok) = h.await?;
+                        let (scheduled, d, lag, ok) = h.await?;
                         if scheduled >= measure_from {
                             if ok {
                                 all.push(d);
+                                send_lags.push(lag);
                             } else {
                                 errors += 1;
                             }
@@ -256,12 +294,63 @@ async fn main() -> Result<()> {
                 }
             };
             let s = summarize(lat, errors, duration);
-            let report =
-                json!({ "loop": r#loop, "concurrency": concurrency, "rate": rate, "summary": s });
+            // Open loop: how late the generator itself sent requests.
+            let send_lag = (!send_lags.is_empty()).then(|| summarize(send_lags, 0, duration));
+            let report = json!({ "loop": r#loop, "concurrency": concurrency, "rate": rate, "summary": s, "send_lag": send_lag });
             println!("{}", serde_json::to_string(&report)?);
             if let Some(o) = out {
                 std::fs::write(o, serde_json::to_string_pretty(&report)?)?;
             }
+        }
+        Cmd::RunQueries {
+            url,
+            dataset,
+            data_dir,
+            k,
+            out,
+        } => {
+            let ds = strata_eval::beir::Dataset::load(&data_dir, &dataset, "test")?;
+            let client = reqwest::Client::new();
+            let mut run = strata_eval::metrics::Run::new();
+            let mut partial = 0usize;
+            for (qid, text) in &ds.queries {
+                let body = json!({ "query": text, "plain": true, "k": k + 1 });
+                let v: serde_json::Value = client
+                    .post(format!("{url}/v1/search"))
+                    .json(&body)
+                    .send()
+                    .await?
+                    .json()
+                    .await?;
+                if v["partial"].as_bool().unwrap_or(false) {
+                    partial += 1;
+                }
+                let hits: Vec<(String, f64)> = v["hits"]
+                    .as_array()
+                    .context("hits")?
+                    .iter()
+                    // Scores travel as the shortest decimal that round-trips the
+                    // f32; going back through f32 recovers the exact value, so
+                    // the run file is byte-comparable with single-node runs.
+                    .map(|h| {
+                        (
+                            h["id"].as_str().unwrap_or_default().to_string(),
+                            f64::from(h["score"].as_f64().unwrap_or(0.0) as f32),
+                        )
+                    })
+                    .filter(|(d, _)| d != qid)
+                    .take(k)
+                    .collect();
+                run.insert(qid.clone(), hits);
+            }
+            strata_eval::harness::write_trec_run(&out, &run, "strata-cluster")?;
+            let e = strata_eval::metrics::evaluate(&ds.qrels, &run);
+            println!(
+                "{dataset}\tqueries={}\tpartial={partial}\tnDCG@10={:.4}\tR@100={:.4}",
+                ds.queries.len(),
+                e.mean.ndcg_at_10,
+                e.mean.recall_at_100
+            );
         }
         Cmd::Ingest {
             url,
