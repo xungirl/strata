@@ -1,0 +1,21 @@
+{
+  "batch": 500,
+  "batch_latency": {
+    "errors": 0,
+    "max_ms": 2382.412083,
+    "p50_ms": 1126.238917,
+    "p90_ms": 1695.513167,
+    "p999_ms": 2382.412083,
+    "p99_ms": 2179.0978330000003,
+    "requests": 116,
+    "seconds": 28.506597375,
+    "throughput_rps": 4.069233464591984
+  },
+  "concurrency": 4,
+  "dataset": "fiqa",
+  "docs": 57638,
+  "docs_per_sec": 2017.1305671177668,
+  "ingest_secs": 28.506597375,
+  "with_commit_secs": 28.574253417,
+  "with_vectors": true
+}

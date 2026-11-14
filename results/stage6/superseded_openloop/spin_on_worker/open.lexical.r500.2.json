@@ -1,0 +1,27 @@
+{
+  "concurrency": 8,
+  "loop": "Open",
+  "rate": 500.0,
+  "send_lag": {
+    "errors": 0,
+    "max_ms": 6.85625,
+    "p50_ms": 0.005625000000000001,
+    "p90_ms": 0.013167,
+    "p999_ms": 1.109084,
+    "p99_ms": 0.027292,
+    "requests": 7500,
+    "seconds": 15.0,
+    "throughput_rps": 500.0
+  },
+  "summary": {
+    "errors": 0,
+    "max_ms": 7.406917,
+    "p50_ms": 0.469375,
+    "p90_ms": 0.873542,
+    "p999_ms": 2.4870840000000003,
+    "p99_ms": 1.425792,
+    "requests": 7500,
+    "seconds": 15.0,
+    "throughput_rps": 500.0
+  }
+}

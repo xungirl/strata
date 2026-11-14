@@ -1,0 +1,58 @@
+# HELP strata_ingested_docs_total Documents acknowledged
+# TYPE strata_ingested_docs_total counter
+strata_ingested_docs_total 57638
+# HELP strata_live_docs Live documents in the current snapshot
+# TYPE strata_live_docs gauge
+strata_live_docs 57638
+# HELP strata_request_duration_seconds Request latency by route
+# TYPE strata_request_duration_seconds histogram
+strata_request_duration_seconds_bucket{route="commit",le="0.00005"} 0
+strata_request_duration_seconds_bucket{route="commit",le="0.0001"} 0
+strata_request_duration_seconds_bucket{route="commit",le="0.0002"} 0
+strata_request_duration_seconds_bucket{route="commit",le="0.0004"} 0
+strata_request_duration_seconds_bucket{route="commit",le="0.0008"} 0
+strata_request_duration_seconds_bucket{route="commit",le="0.0016"} 0
+strata_request_duration_seconds_bucket{route="commit",le="0.0032"} 0
+strata_request_duration_seconds_bucket{route="commit",le="0.0064"} 0
+strata_request_duration_seconds_bucket{route="commit",le="0.0128"} 0
+strata_request_duration_seconds_bucket{route="commit",le="0.0256"} 0
+strata_request_duration_seconds_bucket{route="commit",le="0.0512"} 0
+strata_request_duration_seconds_bucket{route="commit",le="0.1024"} 1
+strata_request_duration_seconds_bucket{route="commit",le="0.2048"} 1
+strata_request_duration_seconds_bucket{route="commit",le="0.4096"} 1
+strata_request_duration_seconds_bucket{route="commit",le="0.8192"} 1
+strata_request_duration_seconds_bucket{route="commit",le="1.6384"} 1
+strata_request_duration_seconds_bucket{route="commit",le="3.2768"} 1
+strata_request_duration_seconds_bucket{route="commit",le="+Inf"} 1
+strata_request_duration_seconds_sum{route="commit"} 0.067424916
+strata_request_duration_seconds_count{route="commit"} 1
+strata_request_duration_seconds_bucket{route="ingest",le="0.00005"} 0
+strata_request_duration_seconds_bucket{route="ingest",le="0.0001"} 0
+strata_request_duration_seconds_bucket{route="ingest",le="0.0002"} 0
+strata_request_duration_seconds_bucket{route="ingest",le="0.0004"} 0
+strata_request_duration_seconds_bucket{route="ingest",le="0.0008"} 0
+strata_request_duration_seconds_bucket{route="ingest",le="0.0016"} 0
+strata_request_duration_seconds_bucket{route="ingest",le="0.0032"} 0
+strata_request_duration_seconds_bucket{route="ingest",le="0.0064"} 0
+strata_request_duration_seconds_bucket{route="ingest",le="0.0128"} 0
+strata_request_duration_seconds_bucket{route="ingest",le="0.0256"} 0
+strata_request_duration_seconds_bucket{route="ingest",le="0.0512"} 1
+strata_request_duration_seconds_bucket{route="ingest",le="0.1024"} 2
+strata_request_duration_seconds_bucket{route="ingest",le="0.2048"} 6
+strata_request_duration_seconds_bucket{route="ingest",le="0.4096"} 26
+strata_request_duration_seconds_bucket{route="ingest",le="0.8192"} 51
+strata_request_duration_seconds_bucket{route="ingest",le="1.6384"} 104
+strata_request_duration_seconds_bucket{route="ingest",le="3.2768"} 116
+strata_request_duration_seconds_bucket{route="ingest",le="+Inf"} 116
+strata_request_duration_seconds_sum{route="ingest"} 110.50732209199997
+strata_request_duration_seconds_count{route="ingest"} 116
+# HELP strata_requests_total Requests by route and status
+# TYPE strata_requests_total counter
+strata_requests_total{route="commit",status="ok"} 1
+strata_requests_total{route="ingest",status="ok"} 116
+# HELP strata_segments Segments in the current snapshot
+# TYPE strata_segments gauge
+strata_segments 3
+# HELP strata_vectors Vectors in the HNSW graph (incl. replaced ones)
+# TYPE strata_vectors gauge
+strata_vectors 57638

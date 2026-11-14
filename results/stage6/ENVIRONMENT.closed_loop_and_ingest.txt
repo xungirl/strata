@@ -1,0 +1,6 @@
+date: 2026-11-13T12:56:57Z
+git: 2c72031
+rustc: rustc 1.94.0 (4a4ef493e 2026-03-02)
+uptime:  4:56  up 65 days,  4:57, 3 users, load averages: 6.56 5.94 4.21
+dataset: fiqa (corpus via HTTP ingest, with bge-small vectors)
+server: target/release/strata-server --dim 384 (tokio multi-thread runtime, 8 cores); load generator on the same machine

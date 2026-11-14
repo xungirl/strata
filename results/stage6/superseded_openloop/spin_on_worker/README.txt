@@ -1,0 +1,1 @@
+Third open-loop run: precise scheduling by spinning on a tokio worker thread. At >= 2000 req/s the spinning starved response processing (generator send-lag p99 up to 31 ms, 18 errors at 4000 req/s). Superseded by ../../load/open.* (scheduler on a dedicated OS thread).

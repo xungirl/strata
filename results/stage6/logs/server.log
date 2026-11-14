@@ -1,0 +1,3 @@
+[2m2026-11-13T13:58:38.960223Z[0m [32m INFO[0m [2mstrata_server::engine[0m[2m:[0m lexical index opened [3msegments[0m[2m=[0m0 [3mreplayed[0m[2m=[0m0
+[2m2026-11-13T13:58:38.960543Z[0m [32m INFO[0m [2mstrata_server[0m[2m:[0m gRPC listening [3maddr[0m[2m=[0m127.0.0.1:7701
+[2m2026-11-13T13:58:38.960756Z[0m [32m INFO[0m [2mstrata_server[0m[2m:[0m HTTP listening [3maddr[0m[2m=[0m127.0.0.1:7700

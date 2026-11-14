@@ -1,0 +1,54 @@
+Spans
+Resource
+	 ->  telemetry.sdk.version=String(Static("0.33.1"))
+	 ->  telemetry.sdk.language=String(Static("rust"))
+	 ->  telemetry.sdk.name=String(Static("opentelemetry"))
+	 ->  service.name=String(Owned("strata-server"))
+Span #0
+	Instrumentation Scope
+		Name         : "strata"
+
+	Name         : ingest
+	TraceId      : 2239216c72f27a5ff7ffffce78f99ab4
+	SpanId       : c7a3a608444b8c72
+	TraceFlags   : TraceFlags(1)
+	ParentSpanId : None (root span)
+	Kind         : Internal
+	Start time   : 2026-11-13 13:40:08.270187
+	End time     : 2026-11-13 13:40:08.275379
+	Status       : Unset
+	Attributes:
+		 ->  code.file.path: String(Static("crates/strata-server/src/engine.rs"))
+		 ->  code.module.name: String(Static("strata_server::engine"))
+		 ->  code.line.number: I64(128)
+		 ->  thread.id: I64(10)
+		 ->  thread.name: String(Owned("tokio-rt-worker"))
+		 ->  target: String(Static("strata_server::engine"))
+		 ->  docs: String(Owned("1"))
+		 ->  busy_ns: I64(5183250)
+		 ->  idle_ns: I64(1074917)
+Spans
+Span #0
+	Instrumentation Scope
+		Name         : "strata"
+
+	Name         : search
+	TraceId      : 125e784d4f4e6e53663cfcdb8485e764
+	SpanId       : 6615272c8a205b34
+	TraceFlags   : TraceFlags(1)
+	ParentSpanId : None (root span)
+	Kind         : Internal
+	Start time   : 2026-11-13 13:40:08.321744
+	End time     : 2026-11-13 13:40:08.321766
+	Status       : Unset
+	Attributes:
+		 ->  code.file.path: String(Static("crates/strata-server/src/engine.rs"))
+		 ->  code.module.name: String(Static("strata_server::engine"))
+		 ->  code.line.number: I64(164)
+		 ->  thread.id: I64(10)
+		 ->  thread.name: String(Owned("tokio-rt-worker"))
+		 ->  target: String(Static("strata_server::engine"))
+		 ->  mode: String(Owned("Lexical"))
+		 ->  k: String(Owned("3"))
+		 ->  busy_ns: I64(16834)
+		 ->  idle_ns: I64(5541)

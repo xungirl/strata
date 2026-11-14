@@ -1,0 +1,16 @@
+{
+  "concurrency": 1,
+  "loop": "Closed",
+  "rate": 1000.0,
+  "summary": {
+    "errors": 0,
+    "max_ms": 19.854916,
+    "p50_ms": 1.034042,
+    "p90_ms": 1.617459,
+    "p999_ms": 3.598,
+    "p99_ms": 2.312583,
+    "requests": 13512,
+    "seconds": 15.0,
+    "throughput_rps": 900.8
+  }
+}

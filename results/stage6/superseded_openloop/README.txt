@@ -1,0 +1,1 @@
+Open-loop runs measured with a generator that relied on tokio::time::sleep_until alone (~1 ms timer granularity), so up to ~1 ms of generator lateness was counted as latency. Superseded by ../load/open.* (sleep + spin to the scheduled instant; send lag recorded). Kept for transparency.
