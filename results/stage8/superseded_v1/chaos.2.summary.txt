@@ -1,0 +1,1 @@
+kills=25 acked_ids=35180 LOST=0 read-after-ack violations=0/3506 read-after-failover violations=0/1250 follower plain-read misses=8/3428 failover p50=6775ms max=16895ms replicas missing=[0, 0, 0]

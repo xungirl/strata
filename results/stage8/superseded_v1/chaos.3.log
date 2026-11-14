@@ -1,0 +1,29 @@
+kill  0: node 3 -> write acked again after 314 ms
+kill  1: node 2 -> write acked again after 267 ms
+kill  2: node 1 -> write acked again after 237 ms
+kill  3: node 3 -> write acked again after 302 ms
+kill  4: node 1 -> write acked again after 2160 ms
+kill  5: node 2 -> write acked again after 253 ms
+kill  6: node 3 -> write acked again after 2494 ms
+kill  7: node 1 -> write acked again after 4535 ms
+kill  8: node 2 -> write acked again after 3718 ms
+kill  9: node 3 -> write acked again after 4760 ms
+kill 10: node 1 -> write acked again after 5851 ms
+kill 11: node 2 -> write acked again after 2118 ms
+kill 12: node 3 -> write acked again after 8224 ms
+kill 13: node 1 -> write acked again after 8198 ms
+kill 14: node 2 -> write acked again after 8389 ms
+kill 15: node 3 -> write acked again after 10309 ms
+kill 16: node 1 -> write acked again after 11159 ms
+kill 17: node 2 -> write acked again after 11402 ms
+kill 18: node 3 -> write acked again after 13305 ms
+kill 19: node 1 -> write acked again after 13167 ms
+kill 20: node 2 -> write acked again after 12826 ms
+kill 21: node 3 -> write acked again after 16784 ms
+kill 22: node 1 -> write acked again after 16868 ms
+kill 23: node 2 -> write acked again after 16922 ms
+kill 24: node 3 -> write acked again after 16974 ms
+Error: error sending request for url (http://127.0.0.1:7852/v1/documents/doc-0)
+
+Caused by:
+    operation timed out

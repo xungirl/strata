@@ -59,6 +59,13 @@ struct Report {
     follower_plain_read_misses: usize,
     lost_acked_ids_leader_consistent_read: usize,
     replicas_missing_acked_ids: Vec<usize>,
+    /// Final checks that never got a definite answer after retries.
+    unverified_checks: usize,
+    /// Time for the restarted node to catch up (all replicas applied the
+    /// commit index seen when it came back).
+    catchup_ms: Vec<f64>,
+    catchup_ms_p50: f64,
+    catchup_ms_max: f64,
 }
 
 struct Cluster {
@@ -288,42 +295,45 @@ async fn main() -> Result<()> {
         );
         tokio::time::sleep(Duration::from_millis(500)).await;
         cluster.start(leader)?; // rejoin (replays its log, catches up)
-        tokio::time::sleep(Duration::from_millis(1500)).await;
+                                // Kill the next leader only once the cluster is whole again: all
+                                // three replicas have applied what was committed when the node came
+                                // back. (Otherwise the next kill can leave a node that is still
+                                // catching up as the only partner, and we would be timing catch-up,
+                                // not failover.) The catch-up time is reported separately.
+        let t = Instant::now();
+        caught_up(&client, &urls, Duration::from_secs(120)).await?;
+        stats
+            .lock()
+            .unwrap()
+            .catchup_ms
+            .push(t.elapsed().as_secs_f64() * 1e3);
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     writer.await?;
 
-    // Settle, then verify every acknowledged id.
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    let leader = find_leader(client.clone(), urls.clone())
-        .await
-        .expect("leader");
+    // Settle (every replica applied everything committed), then verify
+    // every acknowledged id. A request that errors (timeout, 5xx, 421) is
+    // retried; only a definite "not found" counts as lost.
+    caught_up(&client, &urls, Duration::from_secs(120)).await?;
     let acked = acked.lock().unwrap().clone();
     let mut lost = 0;
+    let mut unverified = 0;
     for id in &acked {
-        let r = client
-            .get(format!(
-                "{}/v1/documents/{id}?consistent=true",
-                urls[leader]
-            ))
-            .send()
-            .await?;
-        if r.status() != 200 {
-            lost += 1;
+        match check(&client, &urls, id, true).await {
+            Some(true) => {}
+            Some(false) => lost += 1,
+            None => unverified += 1,
         }
     }
     let mut missing = Vec::new();
     for u in &urls {
         let mut m = 0;
         for id in &acked {
-            if client
-                .get(format!("{u}/v1/documents/{id}"))
-                .send()
-                .await?
-                .status()
-                != 200
-            {
-                m += 1;
+            match check(&client, std::slice::from_ref(u), id, false).await {
+                Some(true) => {}
+                Some(false) => m += 1,
+                None => unverified += 1,
             }
         }
         missing.push(m);
@@ -336,15 +346,23 @@ async fn main() -> Result<()> {
     report.acked_ids = acked.len();
     report.lost_acked_ids_leader_consistent_read = lost;
     report.replicas_missing_acked_ids = missing;
+    report.unverified_checks = unverified;
+    let mut c = report.catchup_ms.clone();
+    c.sort_by(f64::total_cmp);
+    if !c.is_empty() {
+        report.catchup_ms_p50 = c[c.len() / 2];
+        report.catchup_ms_max = *c.last().unwrap();
+    }
     let mut f = report.failover_ms.clone();
     f.sort_by(f64::total_cmp);
     report.failover_ms_p50 = f[f.len() / 2];
     report.failover_ms_max = *f.last().unwrap();
     println!(
-        "kills={} acked_ids={} LOST={} read-after-ack violations={}/{} read-after-failover violations={}/{} follower plain-read misses={}/{} failover p50={:.0}ms max={:.0}ms replicas missing={:?}",
+        "kills={} acked_ids={} LOST={} unverified={} read-after-ack violations={}/{} read-after-failover violations={}/{} follower plain-read misses={}/{} failover p50={:.0}ms max={:.0}ms catch-up p50={:.0}ms max={:.0}ms replicas missing={:?}",
         report.kills,
         report.acked_ids,
         report.lost_acked_ids_leader_consistent_read,
+        report.unverified_checks,
         report.consistent_read_after_ack_violations,
         report.consistent_read_after_ack_checks,
         report.read_after_failover_violations,
@@ -353,6 +371,8 @@ async fn main() -> Result<()> {
         report.follower_plain_read_checks,
         report.failover_ms_p50,
         report.failover_ms_max,
+        report.catchup_ms_p50,
+        report.catchup_ms_max,
         report.replicas_missing_acked_ids
     );
     if let Some(o) = args.out {
@@ -360,4 +380,73 @@ async fn main() -> Result<()> {
         std::fs::write(o, serde_json::to_string_pretty(&report)?)?;
     }
     Ok(())
+}
+
+/// Is `id` present? `consistent` asks the leader (found via redirects among
+/// `urls`) for a linearizable read; otherwise asks `urls[0]` directly.
+/// `Some(true/false)` is a definite answer; `None` = no answer in 10 tries.
+async fn check(
+    client: &reqwest::Client,
+    urls: &[String],
+    id: &str,
+    consistent: bool,
+) -> Option<bool> {
+    let mut target = 0;
+    for _ in 0..10 {
+        let url = if consistent {
+            format!("{}/v1/documents/{id}?consistent=true", urls[target])
+        } else {
+            format!("{}/v1/documents/{id}", urls[target])
+        };
+        if let Ok(r) = client.get(url).send().await {
+            match r.status().as_u16() {
+                200 => return Some(true),
+                404 => return Some(false),
+                421 => {
+                    let body: serde_json::Value = r.json().await.unwrap_or_default();
+                    if let Some(i) = body["leader"]
+                        .as_str()
+                        .and_then(|l| urls.iter().position(|u| u == l))
+                    {
+                        target = i;
+                        continue;
+                    }
+                    target = (target + 1) % urls.len();
+                }
+                _ => {}
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    None
+}
+
+/// Wait until every replica has applied at least the highest commit index
+/// any of them reports right now.
+async fn caught_up(client: &reqwest::Client, urls: &[String], limit: Duration) -> Result<()> {
+    let start = Instant::now();
+    let mut target: Option<u64> = None;
+    loop {
+        let mut applied = Vec::new();
+        let mut commit = 0;
+        for u in urls {
+            if let Ok(r) = client.get(format!("{u}/raft/status")).send().await {
+                if let Ok(v) = r.json::<serde_json::Value>().await {
+                    applied.push(v["applied"].as_u64().unwrap_or(0));
+                    commit = commit.max(v["commit"].as_u64().unwrap_or(0));
+                }
+            }
+        }
+        if target.is_none() && commit > 0 {
+            target = Some(commit);
+        }
+        let goal = target.unwrap_or(u64::MAX);
+        if applied.len() == urls.len() && applied.iter().all(|&a| a >= goal) {
+            return Ok(());
+        }
+        if start.elapsed() > limit {
+            bail!("replicas did not catch up to {goal} within {limit:?} (applied {applied:?})");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }

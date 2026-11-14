@@ -16,6 +16,12 @@
 //!   heartbeat round), waits until it has applied up to that commit index,
 //!   then answers. Without `consistent`, any replica answers from its own
 //!   state (possibly stale).
+//! * **Applying is asynchronous.** Committed entries are handed to a
+//!   dedicated applier thread over a channel; the Raft core keeps ticking,
+//!   voting and replicating while a restarted node replays a long log.
+//!   (The first version applied under the Raft lock: a node catching up
+//!   could not vote for seconds, and failover times grew with the log.)
+//!   Consecutive upserts are applied as one batch (one WAL fsync).
 //! * The state machine (`Index`) keeps its own WAL. On restart a node
 //!   re-applies the committed Raft log from the beginning; adds are
 //!   upserts and deletes are idempotent, so replaying a prefix twice gives
@@ -60,17 +66,20 @@ pub struct Config {
 struct Shared {
     core: RaftNode,
     storage: RaftStorage,
-    /// Leader: proposal index -> (term, reply channel).
-    waiters: HashMap<u64, (u64, oneshot::Sender<Result<(), String>>)>,
     /// Leader: read id -> reply channel (gets the index to wait for).
     reads: HashMap<u64, oneshot::Sender<u64>>,
-    applied: u64,
-    applied_tx: tokio::sync::watch::Sender<u64>,
+    /// Committed entries go to the applier thread.
+    apply_tx: std::sync::mpsc::Sender<Entry>,
 }
+
+/// Proposal index -> (term, reply channel). Shared with the applier, which
+/// answers the client once the entry is applied.
+type Waiters = Mutex<HashMap<u64, (u64, oneshot::Sender<Result<(), String>>)>>;
 
 pub struct RaftShard {
     cfg: Config,
     shared: Mutex<Shared>,
+    waiters: Arc<Waiters>,
     index: Arc<Index>,
     client: reqwest::Client,
     applied_rx: tokio::sync::watch::Receiver<u64>,
@@ -105,15 +114,22 @@ impl RaftShard {
             cfg.id * 7919 + std::process::id() as u64,
         );
         let (applied_tx, applied_rx) = tokio::sync::watch::channel(0);
+        let (apply_tx, apply_rx) = std::sync::mpsc::channel::<Entry>();
+        let waiters: Arc<Waiters> = Arc::default();
+        {
+            let (index, waiters) = (Arc::clone(&index), Arc::clone(&waiters));
+            std::thread::Builder::new()
+                .name("raft-apply".into())
+                .spawn(move || apply_loop(&index, &waiters, &apply_rx, &applied_tx))?;
+        }
         Ok(Arc::new(RaftShard {
             shared: Mutex::new(Shared {
                 core,
                 storage,
-                waiters: HashMap::new(),
                 reads: HashMap::new(),
-                applied: 0,
-                applied_tx,
+                apply_tx,
             }),
+            waiters,
             index,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_millis(500))
@@ -131,21 +147,10 @@ impl RaftShard {
             let me = Arc::clone(self);
             tokio::spawn(async move { me.send(env).await });
         }
-        for e in &ready.committed {
-            self.apply(e)?;
-            sh.applied = e.index;
-            if let Some((term, tx)) = sh.waiters.remove(&e.index) {
-                // Our proposal at this index was replaced by another
-                // leader's entry if the term differs: report failure.
-                let _ = tx.send(if term == e.term {
-                    Ok(())
-                } else {
-                    Err("leadership lost".into())
-                });
-            }
-        }
-        if !ready.committed.is_empty() {
-            let _ = sh.applied_tx.send(sh.applied);
+        for e in ready.committed {
+            // The applier thread owns the state machine; it only stops when
+            // the process exits, so a send cannot fail while we run.
+            sh.apply_tx.send(e).expect("applier thread alive");
         }
         for (id, idx) in ready.reads {
             if let Some(tx) = sh.reads.remove(&id) {
@@ -154,33 +159,12 @@ impl RaftShard {
         }
         if sh.core.role() != Role::Leader {
             // Pending proposals of a deposed leader fail fast; clients retry.
-            for (_, (_, tx)) in sh.waiters.drain() {
+            // (Such an entry may still commit later: the outcome of a failed
+            // write is unknown, never "definitely not written".)
+            for (_, (_, tx)) in self.waiters.lock().unwrap().drain() {
                 let _ = tx.send(Err("not leader".into()));
             }
             sh.reads.clear();
-        }
-        Ok(())
-    }
-
-    fn apply(&self, e: &Entry) -> Result<()> {
-        if e.data.is_empty() {
-            return Ok(()); // leader no-op
-        }
-        match serde_json::from_slice::<Command>(&e.data)? {
-            Command::Upsert(docs) => {
-                let docs: Vec<Document> = docs
-                    .into_iter()
-                    .map(|(id, text)| Document {
-                        id,
-                        text,
-                        fields: Default::default(),
-                    })
-                    .collect();
-                self.index.add_docs(&docs)?;
-            }
-            Command::Delete(ids) => {
-                self.index.delete(&ids)?;
-            }
         }
         Ok(())
     }
@@ -231,7 +215,7 @@ impl RaftShard {
                 Ok(idx) => {
                     let (tx, rx) = oneshot::channel();
                     let term = sh.core.term();
-                    sh.waiters.insert(idx, (term, tx));
+                    self.waiters.lock().unwrap().insert(idx, (term, tx));
                     if let Err(e) = self.process(&mut sh) {
                         return Err(
                             (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
@@ -291,7 +275,7 @@ async fn status(State(s): State<Arc<RaftShard>>) -> Json<Status> {
         term: sh.core.term(),
         leader: sh.core.leader(),
         commit: sh.core.commit_index(),
-        applied: sh.applied,
+        applied: *s.applied_rx.borrow(),
         last_index: sh.core.last_index(),
         live_docs_buffered_or_committed: s.index.live_doc_count(),
     })
@@ -377,4 +361,73 @@ async fn commit(State(s): State<Arc<RaftShard>>) -> Response {
         Ok(Ok(())) => (StatusCode::OK, "ok").into_response(),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "commit failed").into_response(),
     }
+}
+
+/// The applier thread: applies committed entries in log order, then wakes
+/// the writers waiting for them and publishes the applied index.
+fn apply_loop(
+    index: &Arc<Index>,
+    waiters: &Waiters,
+    rx: &std::sync::mpsc::Receiver<Entry>,
+    applied_tx: &tokio::sync::watch::Sender<u64>,
+) {
+    while let Ok(first) = rx.recv() {
+        // Take everything already queued, so a long replay is applied in
+        // big batches instead of one WAL fsync per entry.
+        let mut batch = vec![first];
+        while let Ok(e) = rx.try_recv() {
+            batch.push(e);
+            if batch.len() >= 1024 {
+                break;
+            }
+        }
+        if let Err(e) = apply_batch(index, &batch) {
+            tracing::error!("applying committed entries failed: {e:#}");
+            std::process::exit(1); // the state machine must not skip entries
+        }
+        let last = batch.last().unwrap().index;
+        let mut w = waiters.lock().unwrap();
+        for e in &batch {
+            if let Some((term, tx)) = w.remove(&e.index) {
+                // Our proposal at this index was replaced by another
+                // leader's entry if the term differs: report failure.
+                let _ = tx.send(if term == e.term {
+                    Ok(())
+                } else {
+                    Err("leadership lost".into())
+                });
+            }
+        }
+        drop(w);
+        let _ = applied_tx.send(last);
+    }
+}
+
+/// Apply entries in order; runs of upserts become one `add_docs` call.
+fn apply_batch(index: &Arc<Index>, batch: &[Entry]) -> Result<()> {
+    let mut upserts: Vec<Document> = Vec::new();
+    for e in batch {
+        if e.data.is_empty() {
+            continue; // leader no-op
+        }
+        match serde_json::from_slice::<Command>(&e.data)? {
+            Command::Upsert(docs) => upserts.extend(docs.into_iter().map(|(id, text)| Document {
+                id,
+                text,
+                fields: Default::default(),
+            })),
+            Command::Delete(ids) => {
+                // Keep the order: earlier upserts first, then the delete.
+                if !upserts.is_empty() {
+                    index.add_docs(&upserts)?;
+                    upserts.clear();
+                }
+                index.delete(&ids)?;
+            }
+        }
+    }
+    if !upserts.is_empty() {
+        index.add_docs(&upserts)?;
+    }
+    Ok(())
 }
