@@ -53,3 +53,9 @@
 - Headline: `strata-mcp` (rmcp 3.10, stdio) with remember/remember_many/recall/search/forget/memory_stats; end-to-end test over the real JSON-RPC transport incl. restart durability.
 - Headline: LoCoMo evidence retrieval (1,532 questions): MCP recall nDCG@10 0.494 / R@100 0.806; tag filter +0.038 nDCG@10 (p<1e-5); hybrid with bge-small 0.534 / 0.901; recall p50 0.44 ms (`results/stage9/tables.md`).
 - Caveats: no LLM used (evidence recall, not answer accuracy); MCP server lexical only (dense/hybrid offline); α sweep is test-tuned and not reported; LoCoMo CC BY-NC kept local, transcript redacted.
+
+## Stage 10: Ops & polish (tag `stage-10`)
+- Tests: 105 tests, 10/10 consecutive green runs (`results/stage10/test_10x.txt`); clippy -D warnings + fmt clean.
+- Headline: docs/CAPACITY.md (measured numbers with sources; projections labelled arithmetic), docs/ARCHITECTURE.md (incl. coordinator, Raft, MCP), docs/DEPLOY.md.
+- Headline: Dockerfile + compose (2×2 cluster, coordinator, Prometheus, Grafana) and an 8-panel dashboard verified against a real /metrics scrape (8/8, negative control caught 2/2).
+- Caveats: Docker/compose never executed; coordinator and Raft nodes export no Prometheus metrics; capacity projections are not measurements.

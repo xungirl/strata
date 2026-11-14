@@ -950,3 +950,14 @@ Mean ± std over 3 fresh runs.
 - **Latency.** A `recall` round trip through the MCP server, measured at the client (JSON-RPC over pipes, BM25 with filter, ≈ 600 memories per conversation), is 0.44 ms at p50 and 0.98 ms at p99. Storing all 5,882 memories takes 0.82 s, including one fsync + commit per `remember_many` call.
 - **Not measured:** end-to-end answer accuracy of an LLM agent using these memories (that needs an LLM and a judge; deliberately not done), dense/hybrid recall *inside* the MCP server (the server is lexical only; dense and hybrid here are offline comparisons), concurrency.
 - Tests: 105 tests, 10/10 consecutive green runs (`results/stage9/test_10x.txt`); clippy -D warnings + fmt clean.
+
+# Stage 10: ops and polish
+
+No new performance measurements: this stage packages and documents what stages 1-9 measured.
+
+- **`docs/CAPACITY.md`** is the capacity and performance report. Every value in it is copied from a results file named next to it. Derived planning figures, such as per-document storage costs and a 10-million-document projection, are labelled **arithmetic**, with their formula and assumptions, and were not measured.
+- **`docs/ARCHITECTURE.md`** covers the component map, the write and query data paths, distributed search, Raft replication and the MCP server, and the invariants the tests enforce.
+- **`docs/DEPLOY.md`** covers running every binary as plain processes (as everything here was run), plus monitoring.
+- **`Dockerfile`, `deploy/docker-compose.yml`, `deploy/prometheus.yml`, `deploy/grafana/`** describe a 2-shard × 2-replica cluster behind a coordinator, with Prometheus and an 8-panel Grafana dashboard. **They were written but not executed** (no Docker was used in this project).
+- **Dashboard check.** `deploy/check_dashboard.py` checks every dashboard query's metric names and label keys against a real `/metrics` scrape (`results/stage6/metrics_after_load.txt`): 8 panels, 0 problems (`results/stage10/dashboard_check.txt`). As a negative control, renaming one metric and one label in a copy of the dashboard made it report exactly those 2 problems.
+- Tests: 105 tests, 10/10 consecutive green runs (`results/stage10/test_10x.txt`); clippy -D warnings + fmt clean.

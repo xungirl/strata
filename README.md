@@ -4,7 +4,7 @@
 
 strata is inspired by Lucene/Tantivy (segment architecture, inverted index, block-max WAND) and Qdrant (HNSW), but the engine is our own code: Tantivy shows up only as a comparison baseline in a separate bench crate. The project is built **incrementally over 10 stages**. Every number in this README was measured on one machine; see [BENCHMARK.md](BENCHMARK.md).
 
-> Status: stages 1-9 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid retrieval (RRF and weighted fusion, plus a local cross-encoder re-ranker) is evaluated with paired significance tests. It runs as a service: HTTP + gRPC, Prometheus metrics, OpenTelemetry spans, and its own open- and closed-loop load generator. Stage 7 shards it behind a coordinator (two-phase scatter-gather with global IDF, verified equal to single node on BEIR; deadlines, partial results, hedged requests). Stage 8 replicates a shard with its own Raft implementation (simulation-tested, 0 acknowledged-write loss over 75 leader kills). Stage 9 exposes it to LLM agents as an MCP memory server, evaluated on the LoCoMo agent-memory benchmark. Stage 10 adds ops material (Docker, dashboards, capacity report, architecture doc).
+> Status: all 10 stages are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid retrieval (RRF and weighted fusion, plus a local cross-encoder re-ranker) is evaluated with paired significance tests. It runs as a service: HTTP + gRPC, Prometheus metrics, OpenTelemetry spans, and its own open- and closed-loop load generator. Stage 7 shards it behind a coordinator (two-phase scatter-gather with global IDF, verified equal to single node on BEIR; deadlines, partial results, hedged requests). Stage 8 replicates a shard with its own Raft implementation (simulation-tested, 0 acknowledged-write loss over 75 leader kills). Stage 9 exposes it to LLM agents as an MCP memory server, evaluated on the LoCoMo agent-memory benchmark. Stage 10 adds deployment files (documented, not run), a Grafana dashboard checked against real metrics, a capacity report built from measured numbers ([docs/CAPACITY.md](docs/CAPACITY.md)) and an architecture document ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 
 ---
 
@@ -304,6 +304,31 @@ Use it from an MCP client (for example Claude Code or Claude Desktop):
 { "mcpServers": { "strata-memory": { "command": "/path/to/target/release/strata-mcp", "args": ["--dir", "/path/to/memory-dir"] } } }
 ```
 
+### Stage 10: Ops and polish (done)
+
+**Goal.** Make the project operable and explainable: deployment files, a dashboard, a capacity report built from measured numbers only, and an architecture document.
+
+**Decisions and alternatives considered.**
+
+| decision | chosen | alternatives | why |
+|---|---|---|---|
+| containers | multi-stage `Dockerfile` (Rust build → slim Debian, non-root user) + compose with 2 shards × 2 replicas, coordinator, Prometheus, Grafana | Kubernetes manifests; Helm | smallest description of the stage-7 topology; documented, not required to run |
+| dashboard | Grafana JSON provisioned from files; 8 panels from the metrics the server exports | hand-built in the UI | reproducible; checked against a real scrape |
+| capacity report | measured numbers with their source files; derived figures explicitly labelled "arithmetic" | extrapolated benchmark claims | no number without a measurement behind it |
+
+**Built.**
+- `Dockerfile`, `.dockerignore`, `deploy/docker-compose.yml`, `deploy/prometheus.yml`.
+- `deploy/grafana/` (dashboard + provisioning) and `deploy/check_dashboard.py`.
+- `docs/ARCHITECTURE.md`, `docs/DEPLOY.md`, `docs/CAPACITY.md`.
+
+**Verified.**
+- Every dashboard query uses metric names and labels that `strata-server` really exports. Checked against `results/stage6/metrics_after_load.txt`: 8/8 panels pass. The check's negative control reports a renamed metric and a renamed label.
+- The Docker and compose files were **not** executed.
+
+**Problems hit and fixes.**
+1. *The image build context would have included the datasets and results* (hundreds of MB). Added `.dockerignore`.
+2. *The coordinator and Raft nodes export no Prometheus metrics*, so the dashboard covers shard nodes only. This is documented as a gap.
+
 ### Key metrics
 
 | metric | value | how measured | source file |
@@ -342,10 +367,16 @@ Use it from an MCP client (for example Claude Code or Claude Desktop):
 | Raft simulation sensitivity | 6/6 injected bugs (Figure 8, vote checks, ReadIndex, follower commit) detected | `scripts/raft_mutations.sh` | `results/stage8/mutations.txt` |
 | Agent memory over MCP (LoCoMo, 1,532 questions) | `recall` (BM25 + tag filter) nDCG@10 0.494 / R@100 0.806; hybrid with bge-small 0.534 / 0.901; tag filter +0.038 nDCG@10 (p < 1e-5) | `mcp_locomo_eval.py` + `strata-eval` | `results/stage9/tables.md` |
 | MCP `recall` latency (client-side, stdio) | p50 0.437 ± 0.006 ms, p99 0.98 ± 0.05 ms | 3 runs × 1,532 calls | `results/stage9/mcp.r*/mcp_eval.json` |
-| Tests | 105 tests (unit + proptest vs brute force / single index, end-to-end API and MCP tests, Raft simulation), 10/10 consecutive passes at stage 9 | `cargo test --workspace` ×10 | `results/stage9/test_10x.txt` (earlier stages: `results/stage*/test_10x.txt`) |
+| Tests | 105 tests (unit + proptest vs brute force / single index, end-to-end API and MCP tests, Raft simulation), 10/10 consecutive passes at stage 10 | `cargo test --workspace` ×10 | `results/stage10/test_10x.txt` (earlier stages: `results/stage*/test_10x.txt`) |
 
 ### Next steps
-Stage 10: ops and polish. A Dockerfile and compose file (documented; running them is not required), a Grafana dashboard for the Prometheus metrics, a capacity/performance report built only from measured numbers, and docs/ARCHITECTURE.md.
+The roadmap is complete. The most valuable next steps, in order:
+1. Put the Raft shard behind the coordinator (replicated + sharded together).
+2. Snapshots and log compaction for Raft.
+3. Dense/hybrid recall inside the MCP server.
+4. A parallel HNSW build.
+5. Prometheus metrics for the coordinator and Raft nodes.
+6. Measurements on a real multi-machine network.
 
 ## Architecture
 
@@ -470,6 +501,7 @@ println!("{} {}", segment.external_id(hits[0].doc), hits[0].score);
 - Distributed: all shards on one laptop (no real network or machine failures); replicas kept in sync by the coordinator writing to all of them (no consensus until stage 8); no rebalancing; hedging has no budget/limit; dense/hybrid merge across shards is exact only for exact vector search.
 - Replication: Raft has no log compaction or snapshots (restart replays the whole log; the log grows forever), no membership changes, no pre-vote; the Raft shard is a separate binary not yet wired behind the stage-7 coordinator; only process kills were tested in the real cluster (partitions only in simulation); macOS fsync is not `F_FULLFSYNC`; linearizability is checked with targeted read checks, not a full history checker.
 - Agent memory: the MCP server is lexical only (dense/hybrid results on LoCoMo are offline comparisons); one process per memory directory; no LLM-in-the-loop answer accuracy measured; LoCoMo has only 10 conversations, and the category meanings were not verified.
+- Ops: the Docker/compose files were written but never run; the coordinator and Raft nodes have no Prometheus metrics; the capacity report's projections are arithmetic, not measurements.
 - MS MARCO and other large BEIR sets were deliberately not run (disk budget).
 
 ## Roadmap
@@ -485,13 +517,13 @@ The project is built incrementally; each stage ends with tests, measured numbers
 - [x] **7. Distributed:** sharding (hash by doc id), coordinator scatter-gather top-k merge with global IDF, partial-result timeouts / hedged requests.
 - [x] **8. Replication:** Raft-replicated WAL per shard (openraft or own), leader failover, read replicas; chaos tests with 0 acknowledged-write loss.
 - [x] **9. Agent integration:** MCP server (search/ingest tools), agent memory use-case demo, eval of retrieval quality on agent tasks.
-- [ ] **10. Ops & polish:** Docker/compose files (documented, not required to run), dashboards, capacity/perf report, architecture doc.
+- [x] **10. Ops & polish:** Docker/compose files (documented, not required to run), dashboards, capacity/perf report, architecture doc.
 
-## What the next stage should watch out for
+## What future work should watch out for
 
-- A capacity report may only combine measured numbers. Label every extrapolation as arithmetic, with its assumptions, and keep it separate from measurements.
-- The Docker/compose files cannot be run here (Docker isn't used on this machine for this project). Say clearly that they are untested.
-- Dashboard queries must match the metric names the server actually exports (check `/metrics` output in `results/stage6/metrics_after_load.txt`).
+- Keep the stage-1 parity checks (`compare_runs.py` against the stage-1 run files) for any change to analysis, scoring or storage. They caught every semantic regression so far.
+- Re-check any timing claim under the load gate (`scripts/lib_bench.sh`), with 3 repeats. Several superseded runs in `results/` show how easily the harness itself can lie.
+- Before wiring Raft behind the coordinator, decide how global statistics interact with replicas that lag (read from the leader, or accept approximate IDF).
 
 ## License
 

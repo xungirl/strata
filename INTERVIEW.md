@@ -1016,3 +1016,35 @@ strata-mcp ── initialize / tools/list / tools/call
 **Q6. 延迟？** 客户端测量的一次 `recall`（含 JSON-RPC 和管道）p50 0.44 ms、p99 0.98 ms，3 次重复方差很小。对 LLM 智能体来说可以忽略（一次模型调用是秒级）。
 **Q7. 局限？** MCP 服务器只有词法检索（稠密/混合是离线对比）；没有测 LLM 端到端答题；LoCoMo 只有 10 段对话；类别含义没有核实，只按编号报告。
 **Q8. 如果要用 LLM，你怎么处理密钥和成本？** 运行时从固定文件读取、绝不写进仓库和日志、设调用上限、测试用假 provider——这一阶段干脆完全没用 LLM。
+
+---
+
+# Stage 10：运维与收尾（Ops & polish）
+
+> 新文件：`Dockerfile`、`.dockerignore`、`deploy/docker-compose.yml`、`deploy/prometheus.yml`、`deploy/grafana/*`、`deploy/check_dashboard.py`、`docs/ARCHITECTURE.md`、`docs/DEPLOY.md`、`docs/CAPACITY.md`。
+> 教学顺序：`docs/ARCHITECTURE.md → docs/CAPACITY.md → Dockerfile → docker-compose.yml → check_dashboard.py`
+
+## 1. `Dockerfile` + compose
+**(a)** 多阶段构建：`rust` 镜像里 `cargo build --release`，再把二进制拷到 `debian-slim`，用非 root 用户运行，数据放 `/data` 卷。compose 描述第七阶段的拓扑：2 个分片 × 2 个副本 + 协调器 + Prometheus + Grafana。
+**(b)** 多阶段：最终镜像不带编译器，体积小、攻击面小。`.dockerignore` 防止把几百 MB 的数据集和结果打进构建上下文。**这些文件没有实际运行过**——文档里写清楚，不冒充。
+**(c)** YAML 锚点 `&node` / `<<: *node` 复用服务定义。
+
+## 2. Grafana 仪表盘 + `check_dashboard.py`
+**(a)** 8 个面板：搜索 p50/p99（直方图 `histogram_quantile`）、各路由 QPS、错误率、写入速率、文档数、段数（合并健康）、HNSW 大小。脚本把每个 PromQL 里的指标名和标签名与真实的 `/metrics` 抓取结果对比。
+**(b)** 仪表盘最常见的错误是指标名/标签写错——面板静默显示「No data」。没法跑 Grafana，就用真实抓取结果做静态检查，并做负对照（故意改错一个指标和一个标签，脚本报出 2 个问题）。
+**(c)** `re.findall` 解析 Prometheus 文本格式；`sys.exit(1)` 让检查可以进 CI。
+
+## 3. `docs/CAPACITY.md`
+**(a)** 每个数字都标出处文件；推算的数字单独标「arithmetic」并写出公式和假设（例如每文档存储 = 总量 / 文档数，1000 万文档 = 每文档成本 × 10⁷）。
+**(b)** 容量报告最容易造假的地方是外推。规则：测量值和推算值分开，推算一定写假设（线性扩展、相同文档长度分布），并列出「到真实规模会变的东西」（剪枝收益、HNSW 内存、Raft 日志增长、网络 RTT）。
+
+## Stage 10 面试问答
+**Q1. 1000 万文档需要多少内存/磁盘？** 按 trec-covid 实测的每文档成本推算（不是测量）：词法索引磁盘约 3.1 GB，f32 向量约 15.4 GB，int8 约 3.8 GB，HNSW 图约 2.0 GB。向量是大头，所以量化 + 磁盘上的 f32 重排是首要优化。
+**Q2. 单机能扛多少 QPS？** 实测 fiqa 词法检索 64 并发 11,840 req/s（压测器和服务同机 8 核）；粗算每核约 1,480 req/s。开环 4,000 req/s 时 p99 1.53 ms。
+**Q3. 你怎么监控它？** Prometheus 抓 `/metrics`：请求计数和延迟直方图（按路由）、写入文档数、文档/段/向量数。告警可以看搜索 p99、错误率、段数持续增长（合并跟不上）。协调器和 Raft 节点还没有 Prometheus 指标——是已知缺口。
+**Q4. 为什么 Docker 文件没跑也要写？** 说明部署拓扑和依赖（无需 protoc、非 root、数据卷），方便别人复现；但简历和文档里明确写「未运行」。
+**Q5. 整个项目最值得讲的三件事？**
+- 每一层都和上一层逐位对齐：磁盘 == 内存、剪枝 == 穷举、分片 == 单机。
+- 正确性证据：kill -9 混沌测试和 Raft 混沌测试都是 0 丢失，还有负对照和变异测试证明测试真的能抓到 bug。
+- 诚实测量：负载门控、3 次重复，被推翻的结果连同原因一起保留。
+**Q6. 如果继续做，先做什么？** 把 Raft 分片接到协调器后面；Raft 快照/日志压缩；MCP 里加入稠密/混合召回；并行 HNSW 构建；在真实多机网络上重测。
