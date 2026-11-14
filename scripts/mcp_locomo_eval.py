@@ -25,6 +25,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def redact(v, key=None):
+    """Replace dataset text (memories, questions, answers) by its length, so
+    the protocol transcript kept in results/ contains no LoCoMo content
+    (CC BY-NC 4.0, not redistributed). `memories` lists are cut to 2 items."""
+    if isinstance(v, dict):
+        return {k: redact(x, k) for k, x in v.items()}
+    if isinstance(v, list):
+        if key != "memories":
+            return [redact(x, key) for x in v]
+        items = [redact(x, key) for x in v[:2]]
+        if len(v) > 2:
+            items.append(f"<{len(v) - 2} more>")
+        return items
+    if isinstance(v, str) and key in ("text", "query"):
+        return f"<{len(v)} chars>"
+    return v
+
+
 class McpClient:
     def __init__(self, cmd, transcript, keep=40):
         self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
@@ -34,7 +52,7 @@ class McpClient:
 
     def _log(self, direction, msg):
         if self.keep > 0:
-            self.transcript.write(json.dumps({"dir": direction, "msg": msg}) + "\n")
+            self.transcript.write(json.dumps({"dir": direction, "msg": redact(msg)}) + "\n")
             self.keep -= 1
 
     def send(self, msg):

@@ -1,0 +1,3 @@
+2026-11-14T06:49:20Z mcp r=1 load1=3.78 waited=120s ok
+2026-11-14T06:49:22Z mcp r=2 load1=3.78 waited=0s ok
+2026-11-14T06:49:54Z mcp r=3 load1=3.77 waited=30s ok

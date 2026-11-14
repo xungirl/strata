@@ -1,0 +1,26 @@
+{
+  "server": {
+    "name": "strata-mcp",
+    "version": "0.1.0"
+  },
+  "protocol_version": "2025-06-18",
+  "tools": [
+    "forget",
+    "memory_stats",
+    "recall",
+    "remember",
+    "remember_many",
+    "search"
+  ],
+  "memories": 5882,
+  "questions": 1532,
+  "memory_stats": {
+    "memories": 5882
+  },
+  "ingest_seconds": 0.89,
+  "recall_latency_ms_incl_jsonrpc": {
+    "p50": 0.43320655822753906,
+    "p99": 0.9551048278808594,
+    "max": 2.49481201171875
+  }
+}
