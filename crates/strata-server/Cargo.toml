@@ -32,6 +32,8 @@ opentelemetry-otlp = { version = "0.33.1", features = ["grpc-tonic"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 futures = "0.3.34"
 strata-eval = { version = "0.1.0", path = "../strata-eval" }
+rmcp = { version = "3.10.0", features = ["server", "transport-io", "macros"] }
+schemars = "1.2.3"
 
 [build-dependencies]
 protox = "0.10.0"
