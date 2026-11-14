@@ -42,6 +42,7 @@ use strata_storage::snapshot::{Snapshot, SnapshotHit};
 
 use crate::ast::Filter;
 use crate::filter::SegmentFilter;
+use crate::stats::ScoringStats;
 
 /// Relative safety margin applied to every upper bound before pruning.
 const BOUND_SLACK: f32 = 1e-5;
@@ -178,17 +179,30 @@ pub fn wand_search(
     params: Bm25Params,
     k: usize,
 ) -> (Vec<SnapshotHit>, WandStats) {
+    let local = ScoringStats::local(snap, terms.iter().map(|(t, _)| t.as_str()));
+    wand_search_with_stats(snap, terms, filters, params, k, &local)
+}
+
+/// [`wand_search`] with explicit (e.g. cluster-wide) scoring statistics.
+pub fn wand_search_with_stats(
+    snap: &Snapshot,
+    terms: &[(String, u32)],
+    filters: &[Filter],
+    params: Bm25Params,
+    k: usize,
+    scoring: &ScoringStats,
+) -> (Vec<SnapshotHit>, WandStats) {
     let mut stats = WandStats::default();
     if k == 0 || terms.is_empty() {
         return (Vec::new(), stats);
     }
-    let cs = snap.stats();
+    let cs = scoring.collection();
     let avgdl = cs.avg_doc_len();
     // Index-wide df -> one scorer per term, shared by all segments.
     let scorers: Vec<Bm25TermScorer> = terms
         .iter()
         .map(|(t, count)| {
-            let df = snap.doc_freq(t);
+            let df = scoring.doc_freq(t);
             stats.postings_total += df;
             Bm25TermScorer::new(params, idf(cs.num_docs, df), *count, avgdl)
         })
@@ -379,16 +393,29 @@ pub fn maxscore_search(
     params: Bm25Params,
     k: usize,
 ) -> (Vec<SnapshotHit>, WandStats) {
+    let local = ScoringStats::local(snap, terms.iter().map(|(t, _)| t.as_str()));
+    maxscore_search_with_stats(snap, terms, filters, params, k, &local)
+}
+
+/// [`maxscore_search`] with explicit (e.g. cluster-wide) scoring statistics.
+pub fn maxscore_search_with_stats(
+    snap: &Snapshot,
+    terms: &[(String, u32)],
+    filters: &[Filter],
+    params: Bm25Params,
+    k: usize,
+    scoring: &ScoringStats,
+) -> (Vec<SnapshotHit>, WandStats) {
     let mut stats = WandStats::default();
     if k == 0 || terms.is_empty() {
         return (Vec::new(), stats);
     }
-    let cs = snap.stats();
+    let cs = scoring.collection();
     let avgdl = cs.avg_doc_len();
     let scorers: Vec<Bm25TermScorer> = terms
         .iter()
         .map(|(t, count)| {
-            let df = snap.doc_freq(t);
+            let df = scoring.doc_freq(t);
             stats.postings_total += df;
             Bm25TermScorer::new(params, idf(cs.num_docs, df), *count, avgdl)
         })

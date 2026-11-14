@@ -359,6 +359,31 @@ impl Index {
         self.snapshot.read().unwrap().clone()
     }
 
+    /// Is `id` live in the writer's current state (buffered or committed)?
+    /// Unlike a snapshot lookup this also sees uncommitted writes: "has this
+    /// acknowledged write been applied?" (used by the Raft state machine).
+    pub fn contains_live(&self, id: &str) -> bool {
+        let st = self.state.lock().unwrap();
+        if st.buffer.contains(id) {
+            return true;
+        }
+        st.segments.iter().any(|s| {
+            s.seg
+                .doc_by_external_id(id)
+                .is_some_and(|d| s.live.is_live(d.0))
+        })
+    }
+
+    /// Live documents in the writer's current state (buffered + committed).
+    pub fn live_doc_count(&self) -> usize {
+        let st = self.state.lock().unwrap();
+        st.buffer.num_live()
+            + st.segments
+                .iter()
+                .map(|s| s.live.num_live() as usize)
+                .sum::<usize>()
+    }
+
     /// Docs buffered but not yet committed.
     pub fn buffered_docs(&self) -> usize {
         self.state.lock().unwrap().buffer.num_docs()

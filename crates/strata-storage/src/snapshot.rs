@@ -129,11 +129,27 @@ impl Snapshot {
             .map(|t| (t.term.as_str(), self.doc_freq(&t.term)))
             .collect();
         let df_fn = |t: &str| df.get(t).copied().unwrap_or(0);
+        self.search_scored(query, params, k, allow, self.stats, &df_fn)
+    }
+
+    /// Like [`search_with`](Self::search_with), but scoring uses the given
+    /// collection statistics and document frequencies instead of this
+    /// snapshot's own. A shard in a cluster passes *cluster-wide* statistics
+    /// here, so its scores equal those of a single node holding everything.
+    pub fn search_scored(
+        &self,
+        query: &Query,
+        params: Bm25Params,
+        k: usize,
+        allow: &dyn Fn(usize, DocId) -> bool,
+        stats: CollectionStats,
+        df: &dyn Fn(&str) -> u64,
+    ) -> Vec<SnapshotHit> {
         let mut all = Vec::new();
         for (i, s) in self.segments.iter().enumerate() {
             let live = |d: DocId| s.live.is_live(d.0) && allow(i, d);
-            let hits = Searcher::with_stats(s.segment.as_ref(), params, self.stats)
-                .with_global_df(&df_fn)
+            let hits = Searcher::with_stats(s.segment.as_ref(), params, stats)
+                .with_global_df(df)
                 .with_live_filter(&live)
                 .search(query, k);
             // Re-number with global doc ids so the final top-k breaks ties

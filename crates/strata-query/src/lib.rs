@@ -18,6 +18,7 @@ pub mod ast;
 pub mod exec;
 pub mod filter;
 pub mod parser;
+pub mod stats;
 pub mod wand;
 
 use anyhow::Result;
@@ -27,7 +28,10 @@ use strata_storage::snapshot::{Snapshot, SnapshotHit};
 
 pub use ast::{BoolQuery, Clause, Filter};
 pub use parser::parse;
-pub use wand::{maxscore_search, wand_search, WandStats};
+pub use stats::ScoringStats;
+pub use wand::{
+    maxscore_search, maxscore_search_with_stats, wand_search, wand_search_with_stats, WandStats,
+};
 
 /// How to execute a (filtered) term disjunction. Other queries always use
 /// the boolean executor.
@@ -44,7 +48,7 @@ pub enum Strategy {
     Exhaustive,
 }
 
-/// Run `q` against `snap`.
+/// Run `q` against `snap` with the snapshot's own statistics.
 pub fn search(
     snap: &Snapshot,
     q: &BoolQuery,
@@ -52,10 +56,26 @@ pub fn search(
     k: usize,
     strategy: Strategy,
 ) -> Result<Vec<SnapshotHit>> {
+    let local = ScoringStats::local(snap, q.scoring_terms().iter().map(String::as_str));
+    search_with_stats(snap, q, params, k, strategy, &local)
+}
+
+/// Run `q` with explicit scoring statistics (a shard of a cluster passes
+/// the cluster-wide ones; results then equal a single big index).
+pub fn search_with_stats(
+    snap: &Snapshot,
+    q: &BoolQuery,
+    params: Bm25Params,
+    k: usize,
+    strategy: Strategy,
+    stats: &ScoringStats,
+) -> Result<Vec<SnapshotHit>> {
     match (q.as_disjunction(), strategy) {
-        (Some(terms), Strategy::Auto) => Ok(maxscore_search(snap, &terms, &q.filters, params, k).0),
+        (Some(terms), Strategy::Auto) => {
+            Ok(maxscore_search_with_stats(snap, &terms, &q.filters, params, k, stats).0)
+        }
         (Some(terms), Strategy::BlockMaxWand) => {
-            Ok(wand_search(snap, &terms, &q.filters, params, k).0)
+            Ok(wand_search_with_stats(snap, &terms, &q.filters, params, k, stats).0)
         }
         (Some(terms), Strategy::Exhaustive) => {
             let query = Query::from_terms(
@@ -68,8 +88,16 @@ pub fn search(
                 .iter()
                 .map(|s| filter::SegmentFilter::new(s, &q.filters))
                 .collect();
-            Ok(snap.search_with(&query, params, k, &|seg, doc| filters[seg].allows(doc.0)))
+            let df = |t: &str| stats.doc_freq(t);
+            Ok(snap.search_scored(
+                &query,
+                params,
+                k,
+                &|seg, doc| filters[seg].allows(doc.0),
+                stats.collection(),
+                &df,
+            ))
         }
-        (None, _) => exec::execute(snap, q, params, k),
+        (None, _) => exec::execute_with_stats(snap, q, params, k, stats),
     }
 }

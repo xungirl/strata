@@ -316,3 +316,60 @@ fn wand_actually_prunes_on_skewed_data() {
         stats.docs_scored
     );
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    /// Distributed IDF: hash-partition the corpus into shards, merge the
+    /// shards' local statistics, score each shard with the merged
+    /// statistics, merge the per-shard results: every document gets the
+    /// bit-identical score it gets in one big index.
+    #[test]
+    fn sharded_scores_equal_single_index(docs in corpus(), shards in 2usize..5,
+                                         terms in prop::collection::btree_map(0..VOCAB.len(), 1u32..3, 1..5),
+                                         phrase in prop::option::of((0..VOCAB.len(), 0..VOCAB.len()))) {
+        use strata_query::{search_with_stats, ScoringStats};
+        let (_all_dir, all) = build(&docs, 100_000, 0, &[]);
+        // Shard i holds docs with id hash % shards == i (ids stay d<index>).
+        let mut parts: Vec<Vec<(usize, Vec<usize>)>> = vec![Vec::new(); shards];
+        for (i, d) in docs.iter().enumerate() {
+            parts[i * 7919 % shards].push((i, d.clone()));
+        }
+        let mut shard_idx = Vec::new();
+        for p in &parts {
+            let dir = TempDir::new();
+            let cfg = IndexConfig { analyzer: AnalyzerConfig::simple(), flush_docs: 0, merge_factor: 0, background_merges: false };
+            let (index, _) = Index::open(&dir.0, cfg).unwrap();
+            let batch: Vec<Document> = p.iter().map(|(i, d)| Document {
+                id: format!("d{i}"),
+                text: d.iter().map(|&w| VOCAB[w]).collect::<Vec<_>>().join(" "),
+                fields: fields_of(*i),
+            }).collect();
+            if !batch.is_empty() { index.add_docs(&batch).unwrap(); }
+            index.commit().unwrap();
+            shard_idx.push((dir, index));
+        }
+        let mut q = BoolQuery {
+            should: terms.iter().map(|(&t, &c)| Clause::Term { term: VOCAB[t].into(), count: c }).collect(),
+            ..Default::default()
+        };
+        if let Some((a, b)) = phrase { q.should.push(Clause::Phrase(vec![VOCAB[a].into(), VOCAB[b].into()])); }
+        let n = docs.len();
+        let terms_s = q.scoring_terms();
+        let locals: Vec<ScoringStats> = shard_idx.iter().map(|(_, ix)| ScoringStats::local(&ix.snapshot(), terms_s.iter().map(String::as_str))).collect();
+        let global = ScoringStats::merge(&locals);
+        let mut merged: Vec<(String, u32)> = Vec::new();
+        for (_, ix) in &shard_idx {
+            let snap = ix.snapshot();
+            for h in search_with_stats(&snap, &q, Bm25Params::ANSERINI, n, Mode::Auto, &global).unwrap() {
+                merged.push((snap.external_id(&h).to_string(), h.score.to_bits()));
+            }
+        }
+        let snap = all.snapshot();
+        let mut single: Vec<(String, u32)> = search(&snap, &q, Bm25Params::ANSERINI, n, Mode::Auto).unwrap()
+            .iter().map(|h| (snap.external_id(h).to_string(), h.score.to_bits())).collect();
+        merged.sort();
+        single.sort();
+        prop_assert_eq!(merged, single);
+    }
+}

@@ -102,6 +102,16 @@ impl WriteBuffer {
         doc
     }
 
+    /// Is a live (not deleted, not replaced) version of `id` buffered?
+    pub fn contains(&self, id: &str) -> bool {
+        self.by_id.contains_key(id)
+    }
+
+    /// Number of live buffered documents.
+    pub fn num_live(&self) -> usize {
+        self.by_id.len()
+    }
+
     /// Delete the buffered version of `id`, if any. Returns whether it existed.
     pub fn delete(&mut self, id: &str) -> bool {
         match self.by_id.remove(id) {

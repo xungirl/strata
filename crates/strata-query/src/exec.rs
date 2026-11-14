@@ -24,6 +24,7 @@ use strata_storage::snapshot::{Snapshot, SnapshotHit};
 
 use crate::ast::{BoolQuery, Clause};
 use crate::filter::SegmentFilter;
+use crate::stats::ScoringStats;
 
 /// Doc id meaning "no more documents".
 pub const END: u32 = u32::MAX;
@@ -215,7 +216,7 @@ impl Matcher for PrefixMatcher<'_> {
 
 /// Index-wide scoring context.
 struct Ctx<'s> {
-    snap: &'s Snapshot,
+    stats: &'s ScoringStats,
     params: Bm25Params,
 }
 
@@ -225,11 +226,11 @@ impl Ctx<'_> {
             self.params,
             idf_value,
             count,
-            self.snap.stats().avg_doc_len(),
+            self.stats.collection().avg_doc_len(),
         )
     }
     fn idf(&self, term: &str) -> f32 {
-        idf(self.snap.stats().num_docs, self.snap.doc_freq(term))
+        idf(self.stats.num_docs, self.stats.doc_freq(term))
     }
 }
 
@@ -277,7 +278,19 @@ pub fn execute(
     params: Bm25Params,
     k: usize,
 ) -> Result<Vec<SnapshotHit>> {
-    let ctx = Ctx { snap, params };
+    let local = ScoringStats::local(snap, q.scoring_terms().iter().map(String::as_str));
+    execute_with_stats(snap, q, params, k, &local)
+}
+
+/// [`execute`] with explicit (e.g. cluster-wide) scoring statistics.
+pub fn execute_with_stats(
+    snap: &Snapshot,
+    q: &BoolQuery,
+    params: Bm25Params,
+    k: usize,
+    stats: &ScoringStats,
+) -> Result<Vec<SnapshotHit>> {
+    let ctx = Ctx { stats, params };
     let mut all: Vec<Hit> = Vec::new();
     for seg in snap.segments() {
         let disk = seg.segment.as_ref();
