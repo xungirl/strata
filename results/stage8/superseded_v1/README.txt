@@ -1,4 +1,4 @@
-First chaos run (git 3 commits before the async applier), superseded.
+First chaos run (git cbefa1a, before the async applier), superseded.
 
 What went wrong (all found from these logs):
 1. Committed entries were applied to the index while holding the Raft lock.
