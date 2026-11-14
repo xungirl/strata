@@ -2115,6 +2115,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "strata-raft"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "crc32fast",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "strata-core",
+ "strata-storage",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "strata-server"
 version = "0.1.0"
 dependencies = [
