@@ -673,3 +673,64 @@ Five datasets × five comparisons = 25 tests; with a Bonferroni correction the p
 - Re-ranking cost: about 120-135 (query, doc) pairs/s on the M2 GPU, so ~0.75 s per query for 100 candidates. Not viable as an online path on this hardware.
 - The t-test implementation matches SciPy on all 5 datasets.
 - Tests: 93 tests, 10/10 consecutive green runs (`results/stage5/test_10x.txt`).
+
+
+---
+
+# Stage 6: single-node service
+
+Measured by `scripts/run_stage6.sh` (closed loop and ingest) and `OPEN_ONLY=1 scripts/run_stage6.sh` (the open-loop re-run, see below). One `strata-server --dim 384` process (tokio multi-threaded runtime) and the `strata-load` generator **share the same 8-core laptop**: localhost HTTP, no network, and the generator competes with the server for CPU. Dataset fiqa (57,638 docs with bge-small vectors). Queries are all 6,648 fiqa query texts (round-robin), k=10, punctuation stripped; hybrid requests also carry the 384-d query vector. Every run was gated on 1-minute load < 4 (`results/stage6/load.log`).
+
+```
+date: 2026-11-13T12:56:57Z
+git: 2c72031
+rustc: rustc 1.94.0 (4a4ef493e 2026-03-02)
+uptime:  4:56  up 65 days,  4:57, 3 users, load averages: 6.56 5.94 4.21
+dataset: fiqa (corpus via HTTP ingest, with bge-small vectors)
+server: target/release/strata-server --dim 384 (tokio multi-thread runtime, 8 cores); load generator on the same machine
+```
+
+### Bulk ingest over HTTP (fiqa, 57,638 docs with 384-d vectors; batches of 500, 4 concurrent clients; 3 fresh nodes)
+
+| metric | mean ± std |
+|---|---|
+| docs/s (incl. final commit) | 2221 ± 186 |
+| total seconds | 26.08 ± 2.25 |
+| batch latency p50 ms | 1005 ± 117 |
+| batch latency p99 ms | 1605 ± 497 |
+
+### Closed-loop search (fiqa queries, k=10, 15 s measured after 2 s warm-up; mean ± std of 3 runs)
+
+| mode | clients | throughput req/s | p50 ms | p99 ms | p99.9 ms | errors |
+|---|---|---|---|---|---|---|
+| lexical | 1 | 1827 ± 48 | 0.48 ± 0.01 | 1.52 ± 0.16 | 2.81 ± 0.84 | 0 |
+| lexical | 4 | 7048 ± 463 | 0.50 ± 0.02 | 1.65 ± 0.32 | 3.82 ± 2.81 | 0 |
+| lexical | 16 | 10424 ± 2031 | 1.16 ± 0.09 | 10.37 ± 4.16 | 36.12 ± 26.47 | 0 |
+| lexical | 64 | 11840 ± 93 | 5.08 ± 0.04 | 15.68 ± 0.27 | 44.95 ± 2.56 | 0 |
+| hybrid | 1 | 848 ± 106 | 1.08 ± 0.09 | 2.93 ± 1.15 | 6.69 ± 5.90 | 0 |
+| hybrid | 4 | 3211 ± 395 | 1.16 ± 0.12 | 2.92 ± 0.91 | 6.33 ± 5.40 | 0 |
+| hybrid | 16 | 4969 ± 82 | 2.51 ± 0.06 | 14.31 ± 0.23 | 48.76 ± 3.21 | 0 |
+| hybrid | 64 | 4989 ± 60 | 11.71 ± 0.17 | 37.24 ± 0.41 | 64.89 ± 1.28 | 0 |
+
+### Open-loop search (lexical; latency measured from the scheduled send time)
+
+| target rate req/s | achieved req/s | p50 ms | p99 ms | p99.9 ms | max ms | generator send lag p99 ms | errors |
+|---|---|---|---|---|---|---|---|
+| 500 | 500 ± 0 | 0.72 ± 0.02 | 2.34 ± 0.58 | 20.49 ± 30.60 | 28.7 ± 44.1 | 0.382 ± 0.146 | 0 |
+| 1000 | 1000 ± 0 | 0.46 ± 0.01 | 1.41 ± 0.04 | 2.08 ± 0.11 | 2.9 ± 0.5 | 0.031 ± 0.012 | 0 |
+| 2000 | 2000 ± 0 | 0.46 ± 0.00 | 1.38 ± 0.01 | 1.99 ± 0.01 | 2.5 ± 0.1 | 0.041 ± 0.002 | 0 |
+| 4000 | 4000 ± 0 | 0.47 ± 0.00 | 1.53 ± 0.10 | 7.47 ± 7.04 | 25.1 ± 12.9 | 0.096 ± 0.010 | 0 |
+
+## Reading the numbers
+
+- **Closed loop.** Lexical search scales from 1,827 req/s with one client to about 11,800 req/s at 64 clients, at which point p50 rises to 5.1 ms: the 8 cores are saturated by server plus generator. By Little's law, 64 clients / 11,840 req/s ≈ 5.4 ms per request, matching the p50. Hybrid (BM25 top-100 + HNSW top-100 + RRF) peaks at about 4,990 req/s. Lexical at 16 clients had high run-to-run variance (10,424 ± 2,031 req/s, p99 10 ± 4 ms).
+- **Open loop.** Latency is measured from the scheduled send time, so queueing is not hidden. At 1,000-4,000 req/s, p50 stays at 0.46-0.47 ms and p99 at 1.4-1.5 ms; p99.9 grows to 7.5 ms at 4,000 req/s. At 500 req/s, p50 is slightly *higher* (0.72 ms); our unverified guess is CPU idle-state wake-up latency at low load. The generator's own send lag (actual minus scheduled send time) has p99 ≤ 0.4 ms, so these numbers measure the server and not the load generator.
+- **The load generator had to be fixed twice** (the earlier results are kept in `results/stage6/superseded_openloop/`):
+  1. Scheduling with `tokio::time::sleep_until` alone (~1 ms timer granularity) inflated open-loop p50 to 1.5-1.8 ms.
+  2. Spinning to the exact instant on a tokio worker thread starved response handling at ≥ 2,000 req/s: send-lag p99 reached 31 ms and 18 requests failed at 4,000 req/s.
+  3. The final version spins on a dedicated OS thread and hands each request to the runtime.
+- **Ingest** over HTTP with vectors: 2,221 ± 186 docs/s. The bottleneck is the single-threaded HNSW insert under the vector store's write lock: 57,638 inserts take about as long as the stage-4 offline build (23.9 s). The lexical path alone ingests about 10x faster (stage 2).
+- **Tracing.** `results/stage6/trace_spans.txt` holds the spans exported (stdout exporter) for one ingest, commit and search. They are engine-level spans (`ingest`, `search` with attributes). There is no per-HTTP-request span and no context propagation, and the OTLP exporter path compiles but was not tested against a collector.
+- **gRPC.** Covered by an end-to-end test (`crates/strata-server/tests/api_tests.rs`), not load-tested; `strata-load` speaks HTTP only.
+- Metrics scrapes before and after the load runs: `results/stage6/metrics_after_*.txt`.
+- Tests: 96 tests, 10/10 consecutive green runs (`results/stage6/test_10x.txt`).

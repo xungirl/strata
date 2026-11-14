@@ -29,3 +29,9 @@
 - Headline: hybrid (fixed RRF k=60 / α=0.5) beats BM25 by +0.04..+0.21 nDCG@10 on 5/5 datasets (p ≤ 1e-5); best hybrid beats dense on scifact/nfcorpus/trec-covid (trec-covid 0.8051 vs 0.7578) (`results/stage5/tables.md`).
 - Headline: paired t-test matches SciPy on 5/5 datasets (`results/stage5/crosscheck/`).
 - Caveats: dense alone is best on fiqa/scidocs (fusion with weak BM25 hurts, significant); MiniLM-L-6 cross-encoder lowered nDCG@10 vs RRF on 4/5 datasets; fusion params not tuned on dev splits; reranking offline in Python.
+
+## Stage 6: Single-node service (tag `stage-6`)
+- Tests: 96 tests, 10/10 consecutive green runs (`results/stage6/test_10x.txt`); clippy -D warnings + fmt clean.
+- Headline: closed-loop lexical search 11,840 ± 93 req/s at 64 clients (p50 5.1 ms), 1,827 req/s at 1 client (p50 0.48 ms); hybrid ~4,990 req/s (`results/stage6/tables.md`).
+- Headline: open loop at 4,000 req/s p50 0.47 ms / p99 1.53 ms with generator send-lag p99 0.10 ms; HTTP + gRPC APIs, Prometheus metrics, OTel spans verified via stdout exporter.
+- Caveats: server and load generator share one 8-core laptop; open-loop generator fixed twice (superseded runs kept); ingest bound by single-threaded HNSW inserts (2,221 docs/s); OTLP export not tested against a collector; no auth/backpressure.

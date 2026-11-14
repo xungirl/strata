@@ -797,3 +797,62 @@ bi-encoder：查询和文档分别编码成向量，文档向量可以离线算�
 
 **Q8. 这个阶段有哪些局限？**
 融合在 run 文件上离线做（服务里的在线 RRF 在第六阶段）；重排在 Python 里跑；α、k 没有在 dev 集上调；只用了一个小的嵌入模型和一个小的重排模型。
+
+---
+
+# Stage 6：单机服务（Single-node service）
+
+> 新 crate：`crates/strata-server`（`engine.rs`、`vector_store.rs`、`http.rs`、`grpc.rs`、`metrics.rs`、`telemetry.rs`、`bin/strata-server.rs`、`bin/strata-load.rs`、`proto/strata.proto`、`build.rs`）。
+> 教学顺序：`engine.rs → vector_store.rs → http.rs → grpc.rs (+ proto/build.rs) → metrics.rs → telemetry.rs → bin/strata-server.rs → bin/strata-load.rs`
+
+## 全局图
+
+```
+           HTTP/JSON (axum)              gRPC (tonic, 由 .proto 生成)
+                 │                                  │
+                 └──────────────► Engine ◄──────────┘
+                                   │  ingest: 先 vectors.log fsync, 再词法 WAL fsync, 然后 ack
+                                   │  search: lexical (查询语言 + MaxScore) / dense (HNSW) / hybrid (RRF)
+                 ┌─────────────────┴──────────────────┐
+          strata-storage Index                VectorStore (vectors.log + HNSW)
+   /metrics (Prometheus) · tracing spans (OpenTelemetry: OTLP 或 stdout)
+   strata-load：闭环 (N 个并发 worker) / 开环 (固定速率调度, 无协同遗漏)
+```
+
+## 1. `engine.rs`
+**(a)** 把第二～五阶段拼起来：`ingest`、`delete`、`commit`、`search(mode)`；hybrid 模式各取前 100 做 RRF。
+**(b)** 前端（HTTP、gRPC）只是翻译层，业务逻辑只写一份；`#[tracing::instrument]` 给 ingest/search 自动生成 span。
+**(c)** `#[serde(default)]`、`#[serde(rename_all = "lowercase")]` 让 JSON 字段可选、枚举用小写字符串。
+
+## 2. `vector_store.rs`
+**(a)** 追加写的 `vectors.log`（CRC 记录，批量 fsync）+ 内存 HNSW；启动时重放日志重建图；upsert 追加新节点、旧节点标记删除；`SearchContext` 池复用 visited 数组。
+**(b)** HNSW 不能真删除；图重建是 O(n log n) 的启动成本（BENCHMARK 有建图时间）。向量和词法 WAL 是两个文件，不是一个原子提交——写明了。
+**(c)** `RwLock<State>`：搜索拿读锁并发，插入拿写锁；`Mutex<Vec<SearchContext>>` 简单对象池。
+
+## 3. `http.rs` / `grpc.rs`
+**(a)** axum 路由 + `State<AppState>` 依赖注入；所有可能阻塞（fsync）或 CPU 密集的引擎调用放到 `spawn_blocking`，不卡住异步 worker 线程。gRPC 用 `.proto` 定义，`build.rs` 里用 protox（纯 Rust 的 protobuf 编译器，不需要安装 protoc）+ tonic-prost-build 生成代码。
+**(b)** 为什么两种 API：HTTP/JSON 方便调试和脚本；gRPC 有强类型契约、HTTP/2 多路复用，适合服务间调用（第七阶段协调器）。错误统一转成 400 + JSON 消息。故障注入（按概率延迟搜索）给第七阶段测尾延迟用。
+**(c)** `impl<E: Into<anyhow::Error>> From<E> for ApiError` —— 一个泛型 From 实现，让 handler 里可以直接用 `?`；`#[tonic::async_trait]`；`tonic::include_proto!`。
+
+## 4. `metrics.rs` / `telemetry.rs`
+**(a)** Prometheus：请求计数（按路由、状态）、延迟直方图（50µs 起翻倍 17 档）、已摄入文档数、存活文档数、段数、向量数；`/metrics` 文本格式。Tracing：`tracing-subscriber` 日志 + 可选 OpenTelemetry layer（OTLP/gRPC 批量导出，或 stdout 导出用于验证）。
+**(b)** 直方图而不是平均值：p99 才是用户感受到的；分桶要覆盖从微秒级搜索到秒级批量写入。OTLP 导出需要一个 collector，本机没有跑，所以用 stdout 导出器验证 span 确实产生（写明 OTLP 路径未在本机端到端验证）。
+
+## 5. `bin/strata-load.rs`
+**(a)** 闭环：N 个 worker 收到响应才发下一个——测容量；开环：按固定速率调度请求，延迟从「计划发送时间」算起——避免**协同遗漏（coordinated omission）**：服务卡住时闭环压测器也跟着停发，卡顿就从统计里消失了。
+**(b)** 预热期（warmup）不计入；3 次重复报均值和标准差；压测器和服务在同一台机器上，会互相抢 CPU（写明）。
+**压测器本身的坑（真实经历，面试好故事）**：
+1. 第一版开环用 `tokio::time::sleep_until` 调度，tokio 定时器精度约 1ms，结果开环 p50 是 1.5–1.8ms，而闭环单并发只有 0.48ms——多出来的是**压测器自己迟到**，不是服务慢。
+2. 改成「睡到前 1.5ms 再自旋」后 p50 回到 ~0.5ms，但 ≥2000 req/s 时尾延迟暴涨、还出现错误：自旋发生在 tokio 的 worker 线程上，**饿死了处理响应的任务**。加了「发送延迟」（实际发出时间 − 计划时间）统计，p99 达到 31ms，证实了是压测器的问题。
+3. 最终把调度器放到独立 OS 线程上自旋，用 `Handle::spawn` 把请求投递给运行时。
+三版数据都保留在 `results/stage6/superseded_openloop/`，BENCHMARK 只用最后一版，并报告发送延迟。教训：先验证测量工具本身。
+
+## Stage 6 面试问答
+**Q1. 为什么要 spawn_blocking？** tokio 的 worker 线程数≈核数，在上面做 fsync 或几毫秒的 CPU 计算会让同一线程上的其他请求排队；blocking 池专门跑这种任务。
+**Q2. 闭环和开环压测的区别？什么是 coordinated omission？** 见上。开环的 p99 才反映「用户按自己的节奏来请求」时的真实尾延迟。还要验证压测器自己准不准：我们记录了「发送延迟」。
+**Q3. 怎么选 Prometheus 直方图的桶？** 按预期延迟范围取指数桶；桶太粗 p99 估不准，太细时间序列太多。我们 50µs×2^k，到约 3.3s。
+**Q4. gRPC 和 REST 怎么选？** 内部服务间用 gRPC（契约、二进制、HTTP/2、流式）；对外/调试用 HTTP/JSON。
+**Q5. 为什么写入要两个 fsync？能合并吗？** 向量日志和词法 WAL 分开；可以把向量放进同一个 WAL 记录里实现原子性和一次 fsync，是已知的改进点。
+**Q6. 吞吐量的瓶颈在哪？** 闭环 64 并发时词法搜索约 11,800 req/s、p50 5.1ms：8 核被服务和压测器一起打满；64 / 11,840 ≈ 5.4ms，正好符合利特尔定律（Little's law：并发 = 吞吐 × 延迟）。写入的瓶颈是 HNSW 单线程插入（向量库写锁），带向量摄入约 2,200 docs/s。
+**Q7. 你的 tracing 是怎么验证的？** 用 stdout 导出器跑一次真实请求，检查输出里有 HTTP→engine.search 的 span 和属性。
+**Q8. 服务的局限？** 单进程单机；没有认证、限流、背压；向量和词法写入不是一个原子提交；HNSW 启动时重建。

@@ -4,7 +4,7 @@
 
 strata is inspired by Lucene/Tantivy (segment architecture, inverted index, block-max WAND) and Qdrant (HNSW), but the engine is our own code: Tantivy shows up only as a comparison baseline in a separate bench crate. The project is built **incrementally over 10 stages**. Every number in this README was measured on one machine; see [BENCHMARK.md](BENCHMARK.md).
 
-> Status: stages 1-5 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid retrieval (RRF and weighted fusion, plus a local cross-encoder re-ranker) is evaluated with paired significance tests. The HTTP/gRPC service comes in stage 6.
+> Status: stages 1-6 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid retrieval (RRF and weighted fusion, plus a local cross-encoder re-ranker) is evaluated with paired significance tests. It runs as a service: HTTP + gRPC, Prometheus metrics, OpenTelemetry spans, and its own open- and closed-loop load generator. Sharding comes in stage 7.
 
 ---
 
@@ -164,6 +164,32 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 2. *The driver script was edited while bash was executing it*, so bash read a shifted file and failed at the very end. The results of that run were complete. Re-ran the script fully (re-ranking cached) after the fusion fix; lesson recorded.
 3. *A negative result kept as-is*: the re-ranker hurts on these corpora. It was not tuned away or hidden.
 
+### Stage 6: Single-node service (done)
+
+**Goal.** Run the engine as a network service with production basics (two APIs, bulk ingest, metrics, tracing) and measure it under load honestly.
+
+**Decisions and alternatives considered.**
+
+| decision | chosen | alternatives | why |
+|---|---|---|---|
+| HTTP | axum 0.8, JSON, engine calls in `spawn_blocking` | actix-web; doing index work on async threads | fsync and CPU-heavy search must not stall the async workers |
+| gRPC | tonic 0.14 from `proto/strata.proto`, compiled by `protox` in `build.rs` | `protoc` + prost-build | no system protoc needed (pure Rust build) |
+| metrics | `prometheus` crate: request counter and latency histogram by route (17 exponential buckets from 50 µs), docs/segments/vectors gauges | metrics + exporter crates | simple, standard text exposition |
+| tracing | `tracing` + `tracing-opentelemetry`; OTLP/gRPC exporter or a stdout exporter | logs only | spans for ingest/search; verified with the stdout exporter |
+| vectors in the service | append-only CRC'd `vectors.log` (fsynced) + in-memory HNSW rebuilt at start; upsert = new node + hide the old one | vectors in the lexical WAL; persisted graph | simple and durable; HNSW cannot delete |
+| load generator | own `strata-load`: closed loop (N workers) and open loop (fixed-rate schedule, latency from the scheduled time, send lag recorded) | wrk / k6 | open-loop measurement without coordinated omission, plus hybrid queries with vectors |
+
+**Built.** New crate `strata-server`: `engine` (lexical / dense / hybrid search, ingest, delete, commit), `vector_store`, `http`, `grpc`, `metrics`, `telemetry`; binaries `strata-server` and `strata-load`; `scripts/run_stage6.sh`.
+
+**Verified.** End-to-end API tests on ephemeral ports: HTTP ingest, visibility after commit, query language with filters, dense and hybrid search, 400 errors, delete hides both the lexical doc and its vector, `/metrics` content. gRPC ingest, commit, search and error codes. Vector store restart with a torn tail. OpenTelemetry spans observed with the stdout exporter.
+
+**Measured** (fiqa, localhost, generator on the same 8 cores): closed-loop lexical 1,827 req/s with 1 client (p50 0.48 ms) up to about 11,800 req/s with 64 clients (p50 5.1 ms); hybrid up to about 4,990 req/s. Open loop at 4,000 req/s: p50 0.47 ms, p99 1.5 ms, generator send-lag p99 0.1 ms. HTTP ingest with vectors 2,221 docs/s, bound by single-threaded HNSW inserts.
+
+**Problems hit and fixes.**
+1. *2 MB default body limit*: bulk batches with vectors were rejected. Raised the limit explicitly.
+2. *The load generator lied, twice.* Timer granularity added ~1 ms to open-loop latencies. Then spinning on a tokio worker starved response handling (send-lag p99 31 ms). Fixed with a dedicated scheduler thread, and the send lag is now reported next to every result. Superseded runs are kept.
+3. *Ingest is HNSW-bound.* Documented; parallel/batched graph inserts are future work.
+
 ### Key metrics
 
 | metric | value | how measured | source file |
@@ -191,11 +217,13 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 | Hybrid retrieval nDCG@10 (fixed RRF k=60 / α=0.5) | trec-covid 0.8051 vs dense 0.7578 vs BM25 0.5943; RRF − BM25 +0.04..+0.21 (p ≤ 1e-5, 5/5 datasets); dense alone best on fiqa/scidocs | `strata-eval hybrid`, paired randomization test | `results/stage5/tables.md` |
 | Cross-encoder re-rank (MiniLM-L-6, top 100) | lowered nDCG@10 vs RRF on 4/5 datasets (scifact −0.0445, p=0.003); ~125 pairs/s on MPS | `rerank_cross_encoder.py` | `results/stage5/` |
 | Significance test correctness | paired t-test equals SciPy `ttest_rel` on 5/5 datasets | `crosscheck_stats.py` | `results/stage5/crosscheck/` |
+| Service throughput (fiqa, localhost, shared 8 cores) | lexical 11,840 ± 93 req/s @64 clients (p50 5.1 ms); 1,827 req/s @1 client (p50 0.48 ms); hybrid 4,989 req/s @64 | `strata-load` closed loop, 3 runs | `results/stage6/tables.md` |
+| Open-loop latency at 4,000 req/s | p50 0.47 ms, p99 1.53 ms, p99.9 7.5 ms; generator send-lag p99 0.10 ms | `strata-load --loop open`, 3 runs | `results/stage6/load/open.*.json` |
 | Structured queries (k=10 p50) | phrase 157-207 µs, boolean 258-283 µs, prefix 79-804 µs (p99 up to 18.6 ms) | `strata-qbench` | `results/stage3/qbench/` |
 | Tests | 48 tests (unit + proptest vs brute force), 10/10 consecutive passes | `cargo test --workspace` ×10 | `results/test_10x.txt` |
 
 ### Next steps
-Stage 6: a single-node service. An axum HTTP API and a tonic gRPC API over the engine (lexical, dense, hybrid), bulk ingest, Prometheus metrics, OpenTelemetry tracing, and our own open- and closed-loop load tester.
+Stage 7: distribution. Hash sharding behind a coordinator that does two-phase scatter-gather with global IDF, and proof that sharded results equal single-node results on BEIR. Then partial results on timeout, and hedged requests measured against an injected slow replica.
 
 ## Architecture
 
@@ -271,6 +299,9 @@ target/release/strata-vbench --dataset fiqa --out results/stage4/fiqa.json
 scripts/run_stage4.sh                    # every stage-4 number
 target/release/strata-eval hybrid --dataset trec-covid --lexical <bm25.trec> --dense <dense.trec>
 scripts/run_stage5.sh                    # every stage-5 number (re-ranking needs uv + torch)
+target/release/strata-server --dir data/node --http 127.0.0.1:7700 --grpc 127.0.0.1:7701 --dim 384
+target/release/strata-load search --url http://127.0.0.1:7700 --queries data/fiqa/queries.jsonl --loop open --rate 2000
+scripts/run_stage6.sh                    # every stage-6 number
 
 scripts/run_all.sh                       # everything in BENCHMARK.md (9.5 min on this M2)
 python3 -I scripts/make_tables.py        # regenerate the tables from results/*.json
@@ -304,6 +335,7 @@ println!("{} {}", segment.external_id(hits[0].doc), hits[0].score);
 - **The Tantivy comparison is not a claim that strata is faster.** Tantivy's index is compressed (4.5–5.1× smaller), it does far more, and we did not profile it. strata's exhaustive scan over raw `u32` postings is cheap on these small corpora. The gap may well reverse at scale or once stage 2 adds compression.
 - Vectors: single-threaded HNSW build; no PQ; filtered ANN switches strategies by a fixed threshold; the vector index is separate from the lexical segments (no shared WAL yet).
 - Hybrid: fusion parameters are fixed, not tuned on dev splits; re-ranking runs offline in Python.
+- Service: no auth, rate limiting or backpressure; lexical WAL and vector log are two separate fsyncs (not one atomic commit); HNSW is rebuilt on start; load generator and server share the machine.
 - MS MARCO and other large BEIR sets were deliberately not run (disk budget).
 
 ## Roadmap
@@ -315,7 +347,7 @@ The project is built incrementally; each stage ends with tests, measured numbers
 - [x] **3. Query engine:** WAND / block-max WAND, boolean/phrase/prefix queries, metadata filters, query parser; latency vs exhaustive.
 - [x] **4. Vector index:** own HNSW, SIMD distance, int8 scalar quantization (+ optional product quantization), filtered ANN; recall@10 vs latency curves vs brute force.
 - [x] **5. Hybrid retrieval:** RRF + weighted/normalized fusion, optional cross-encoder rerank; BEIR nDCG lexical vs dense vs hybrid.
-- [ ] **6. Single-node service:** axum HTTP + gRPC (tonic) API, bulk ingest, Prometheus metrics, OpenTelemetry tracing, own load tester.
+- [x] **6. Single-node service:** axum HTTP + gRPC (tonic) API, bulk ingest, Prometheus metrics, OpenTelemetry tracing, own load tester.
 - [ ] **7. Distributed:** sharding (hash by doc id), coordinator scatter-gather top-k merge with global IDF, partial-result timeouts / hedged requests.
 - [ ] **8. Replication:** Raft-replicated WAL per shard (openraft or own), leader failover, read replicas; chaos tests with 0 acknowledged-write loss.
 - [ ] **9. Agent integration:** MCP server (search/ingest tools), agent memory use-case demo, eval of retrieval quality on agent tasks.
@@ -323,10 +355,10 @@ The project is built incrementally; each stage ends with tests, measured numbers
 
 ## What the next stage should watch out for
 
-- Blocking work (fsync, CPU-heavy search) must not run on the async worker threads.
-- Measure load with an open-loop generator too: closed-loop numbers hide queueing (coordinated omission).
-- The load generator and the server share 8 cores on this laptop. Say so next to every throughput number.
-- Ingest has two durable stores (lexical WAL and vector log). Document the ordering and that it is not one atomic commit.
+- Per-shard BM25 statistics make sharded scores differ from single-node scores. Collect global N/avgdl/df first (two phases) and verify bit equality on BEIR.
+- Run files must keep exact f32 scores across JSON hops (shortest round-trip formatting, then parse back through f32).
+- Tail experiments need a controlled fault (an injected delay on one replica) and a no-fault baseline. Report the extra requests that hedging costs.
+- Everything still runs on one laptop: no real network, no real failures. Say so.
 
 ## License
 
