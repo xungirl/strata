@@ -1,0 +1,12 @@
+2026-11-14T05:14:28Z tail healthy-1replica r=1 load1=3.95 waited=210s ok
+2026-11-14T05:16:20Z tail healthy-1replica r=2 load1=3.92 waited=90s ok
+2026-11-14T05:17:13Z tail healthy-1replica r=3 load1=3.44 waited=30s ok
+2026-11-14T05:17:35Z tail faulty-nohedge r=1 load1=3.37 waited=0s ok
+2026-11-14T05:17:57Z tail faulty-nohedge r=2 load1=3.65 waited=0s ok
+2026-11-14T05:18:19Z tail faulty-nohedge r=3 load1=3.71 waited=0s ok
+2026-11-14T05:18:41Z tail faulty-hedge5ms r=1 load1=3.48 waited=0s ok
+2026-11-14T05:19:03Z tail faulty-hedge5ms r=2 load1=3.75 waited=0s ok
+2026-11-14T05:21:25Z tail faulty-hedge5ms r=3 load1=3.93 waited=120s ok
+2026-11-14T05:21:47Z tail faulty-hedge15ms r=1 load1=3.63 waited=0s ok
+2026-11-14T05:22:09Z tail faulty-hedge15ms r=2 load1=3.82 waited=0s ok
+2026-11-14T05:22:31Z tail faulty-hedge15ms r=3 load1=3.66 waited=0s ok

@@ -1,0 +1,1 @@
+scidocs	queries=1000	partial=0	nDCG@10=0.1498	R@100=0.3473

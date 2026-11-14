@@ -1,0 +1,4 @@
+shard 7711 strata_live_docs 925
+shard 7712 strata_live_docs 910
+shard 7713 strata_live_docs 905
+shard 7714 strata_live_docs 893

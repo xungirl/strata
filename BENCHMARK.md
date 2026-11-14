@@ -734,3 +734,59 @@ server: target/release/strata-server --dim 384 (tokio multi-thread runtime, 8 co
 - **gRPC.** Covered by an end-to-end test (`crates/strata-server/tests/api_tests.rs`), not load-tested; `strata-load` speaks HTTP only.
 - Metrics scrapes before and after the load runs: `results/stage6/metrics_after_*.txt`.
 - Tests: 96 tests, 10/10 consecutive green runs (`results/stage6/test_10x.txt`).
+
+# Stage 7: distributed (sharding, scatter-gather, hedging)
+
+Measured by `scripts/run_stage7.sh`; tables rendered by `scripts/make_tables_stage7.py` (`results/stage7/tables.md`). **Every process (shard nodes, coordinator, load generator) runs on the same 8-core laptop over localhost**, so there is no real network latency or failure here. Faults are injected on purpose (`strata-server --inject-delay-prob/--inject-delay-ms`, a node that is not running). The correctness part (A) was not load-gated, because it measures no time. Every tail-latency run (B) was gated on 1-minute load < 4, and all 12 started at a load of 3.37-3.95 (`results/stage7/load.log`). The load came from other processes (a colima VM and the desktop), not from strata.
+
+```
+date: 2026-11-14T05:10:28Z
+git: ecee6c3
+uptime at script start: load averages 19.50 12.05 7.47 (part A only; part B gated, see load.log)
+all nodes, coordinator and load generator on one machine (localhost)
+```
+
+How a search works: the coordinator sends `/v1/stats` (local N, total tokens and per-term df for the query terms) to every shard and sums the answers. It then sends `/v1/search` with those global statistics, and merges the per-shard top-k by score and then id. Ingest is routed by FNV-1a(id) % shards.
+
+### Sharded (4 shards) vs single node, all BEIR test queries, k=1000
+
+Single node = the stage-1 run file; cluster = 4 `strata-server` shards behind `strata-coord`, documents routed by FNV-1a(id) % 4, two-phase scatter-gather with global statistics.
+
+| dataset | docs per shard | nDCG@10 single / cluster | R@1000 single / cluster | identical top-100 lists | identical top-1000 lists | differing lists explained by a score tie at rank 1000 | max abs score diff |
+|---|---|---|---|---|---|---|---|
+| scifact | 1291/1297/1314/1281 | 0.677677 / 0.677677 | 0.976667 / 0.976667 | 300/300 | 269/300 | 31/31 | 0 |
+| nfcorpus | 925/910/905/893 | 0.320209 / 0.320209 | 0.370180 / 0.370180 | 308/308 | 302/308 | 6/6 | 0 |
+| fiqa | 14281/14325/14510/14522 | 0.235330 / 0.235330 | 0.740260 / 0.740260 | 648/648 | 634/648 | 14/14 | 0 |
+| scidocs | 6435/6353/6513/6356 | 0.149824 / 0.149824 | 0.563817 / 0.563817 | 1000/1000 | 924/1000 | 76/76 | 0 |
+| trec-covid | 42897/43035/42883/42517 | 0.594341 / 0.594341 | 0.395925 / 0.395925 | 50/50 | 44/50 | 6/6 | 0 |
+
+### Hedged requests vs an injected slow replica (fiqa, 2 shards x 2 replicas, open loop 200 req/s, 20 s; mean ± std of 3 runs)
+
+Replica 7721 (shard 0) sleeps 50 ms before 5% of the `/v1/search` calls it receives (`/v1/stats` is not delayed). Each coordinator search makes 2 rounds (stats, search) x 2 shards = 4 shard calls; the coordinator rotates the first replica it tries, so about half of shard-0 search calls go to the faulty replica first, i.e. about 2.5% of searches hit a delay without hedging. 'healthy' uses only the 3 normal replicas (one per shard).
+
+| config | achieved req/s | p50 ms | p90 ms | p99 ms | p99.9 ms | max ms | extra shard requests from hedging % | hedges won / fired | errors |
+|---|---|---|---|---|---|---|---|---|---|
+| healthy, 1 replica per shard, no hedging | 200 ± 0 | 1.34 ± 0.01 | 2.37 ± 0.15 | 9.03 ± 3.76 | 58.89 ± 23.83 | 75.3 ± 26.9 | 0.00 ± 0.00 | 0.00 ± 0.00 | 0 |
+| 2 replicas, one delays 5% by 50 ms, no hedging | 200 ± 0 | 1.29 ± 0.03 | 3.27 ± 1.25 | 56.34 ± 5.82 | 82.56 ± 29.09 | 100.3 ± 39.4 | 0.00 ± 0.00 | 0.00 ± 0.00 | 0 |
+| same, hedge after 5 ms | 200 ± 0 | 1.30 ± 0.07 | 2.40 ± 0.14 | 9.32 ± 1.81 | 26.69 ± 10.96 | 35.2 ± 9.8 | 1.67 ± 0.84 | 0.85 ± 0.17 | 0 |
+| same, hedge after 15 ms | 200 ± 0 | 1.37 ± 0.07 | 2.52 ± 0.13 | 18.16 ± 0.11 | 24.48 ± 5.43 | 36.7 ± 11.6 | 1.26 ± 0.06 | 0.99 ± 0.02 | 0 |
+
+### Timeouts and partial results (deadline 500 ms per shard call)
+
+| scenario | wall time s (curl) | partial | failed_shards | hits returned |
+|---|---|---|---|---|
+| dead_shard | 0.00 | True | [1] | 5 |
+| slow_shard.1 | 0.51 | True | [1] | 5 |
+| slow_shard.2 | 0.50 | True | [1] | 5 |
+| slow_shard.3 | 0.51 | True | [1] | 5 |
+
+## Reading the numbers
+
+- **Sharded = single node.** On all 5 datasets the 4-shard cluster gives the same nDCG@10, R@100, R@1000 and MRR@10 as the stage-1 single-node run, to 6 decimals (`results/stage7/parity/*.eval_*.txt`). Top-100 lists are identical for every query, and no document's score differs at all (max |diff| 0).
+- **Why some top-1000 lists differ.** 133 of 2,306 queries have a top-1000 list that differs. For every one of them, `scripts/tie_analysis.py` shows the score sequence is identical rank by rank, and the only difference is *which* documents fill a group of equal scores at the cutoff (rank 1000). The single node breaks such ties by internal doc order; each shard picks its own tie winners before the coordinator merges. None of the differences has another cause (the script fails if one does). Making the tie-break global (by external id everywhere) would make the files byte-identical; it was not needed for any metric.
+- **Global statistics matter.** A unit test (`global_stats_make_shards_score_like_one_node`) checks that two half-indexes given the merged statistics return bit-identical scores to one node. Its negative control checks that local-only statistics give different scores. A proptest does the same for 2-4 random hash partitions (`crates/strata-query/tests/query_tests.rs`).
+- **Hedging.** With one replica slowed down (5% of its searches +50 ms, about 2.5% of coordinator searches affected), p99 rises from 9.0 ms (healthy) to 56.3 ms. Hedging after 5 ms brings p99 back to 9.3 ms and p99.9 from 82.6 to 26.7 ms. It costs 1.67% extra shard requests, and 85% of fired backups answered first. Hedging after 15 ms gives p99 18.2 ms (≈ the 15 ms wait plus a normal response) for 1.26% extra requests, and the backup won 99% of the time. p50 is unchanged (1.3 ms) in every configuration.
+- **The healthy baseline has a noisy tail too.** It has no injected faults, yet its p99.9 is 58.9 ± 23.8 ms and its max 75 ms. These are outliers from the shared, busy machine (load ≈ 3.5-3.9 from other processes). So p99.9 and max differences between configurations are within noise; p99 is the robust comparison.
+- **Partial results.** A shard that delays every search by 3 s, behind a 500 ms deadline: the coordinator answers in 0.50-0.51 s (3 tries) with `partial: true`, `failed_shards: [1]` and the hits of the healthy shard. A shard that is not running at all fails immediately (connection refused, wall time ≈ 0) with the same flags. When a shard is missing, its statistics are missing too, so the returned scores are approximate; that is why the response is marked partial.
+- **Not measured here:** cross-machine latency, coordinator throughput limits, dense/hybrid merge quality across shards (dense mode merges the per-shard HNSW top-k by similarity, which is exact for exact search and approximate for HNSW), rebalancing.
+- Tests: 99 tests, 10/10 consecutive green runs (`results/stage7/test_10x.txt`).

@@ -1,0 +1,1 @@
+{"batch":1000,"batch_latency":{"errors":0,"max_ms":190.596125,"p50_ms":71.95524999999999,"p90_ms":155.918375,"p999_ms":190.596125,"p99_ms":190.596125,"requests":26,"seconds":0.583826584,"throughput_rps":44.533772035293275},"concurrency":4,"dataset":"scidocs","docs":25657,"docs_per_sec":27009.287502006722,"ingest_secs":0.583826584,"with_commit_secs":0.9499325,"with_vectors":false}

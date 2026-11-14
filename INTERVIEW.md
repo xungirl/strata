@@ -856,3 +856,52 @@ bi-encoder：查询和文档分别编码成向量，文档向量可以离线算�
 **Q6. 吞吐量的瓶颈在哪？** 闭环 64 并发时词法搜索约 11,800 req/s、p50 5.1ms：8 核被服务和压测器一起打满；64 / 11,840 ≈ 5.4ms，正好符合利特尔定律（Little's law：并发 = 吞吐 × 延迟）。写入的瓶颈是 HNSW 单线程插入（向量库写锁），带向量摄入约 2,200 docs/s。
 **Q7. 你的 tracing 是怎么验证的？** 用 stdout 导出器跑一次真实请求，检查输出里有 HTTP→engine.search 的 span 和属性。
 **Q8. 服务的局限？** 单进程单机；没有认证、限流、背压；向量和词法写入不是一个原子提交；HNSW 启动时重建。
+
+
+---
+
+# Stage 7：分布式（Distributed）
+
+> 新文件：`crates/strata-query/src/stats.rs`（`ScoringStats`）、`Snapshot::search_scored`、服务端 `/v1/stats` 和 `global_stats`、`crates/strata-server/src/bin/strata-coord.rs`（协调器）、`strata-load run-queries`、`scripts/run_stage7.sh`、`scripts/tie_analysis.py`、`scripts/make_tables_stage7.py`。
+> 教学顺序：`stats.rs → snapshot.rs::search_scored → engine.rs (plain / global_stats / scoring_stats) → strata-coord.rs`
+
+## 全局图
+
+```
+client ──► strata-coord
+            │ 写：按 FNV-1a(id) % 分片数 路由，写到该分片的所有副本，全部 ack 才 ack
+            │ 读：第 1 阶段 /v1/stats 并行发给每个分片 → 求和得到全局 N、总词数、df
+            │     第 2 阶段 /v1/search 带全局统计量并行发给每个分片 → 各分片 top-k
+            │     合并：按分数降序（分片文档互不相交）取前 k
+            │     每个分片调用有截止时间；超时/失败 → partial=true + failed_shards
+            │     对冲请求（hedging）：主副本 hedge_ms 内没回 → 再发给另一个副本，谁先回用谁
+   shard0 [r00, r01]   shard1 [r10, r11]  ...（每个都是第六阶段的 strata-server）
+```
+
+## 1. `stats.rs` + `search_scored`
+**(a)** `ScoringStats { num_docs, total_tokens, df }`，`local(snapshot, terms)`、`merge(parts)`；所有打分路径（MaxScore、BMW、TAAT、布尔执行器）都有 `*_with_stats` 版本。
+**(b)** **全局 IDF**：BM25 的 IDF 和 avgdl 依赖整个集合。每个分片只用本地统计量，同一篇文档在不同分片的得分就不同，合并 top-k 会排错。两阶段（先收集统计量再打分）是 Elasticsearch `dfs_query_then_fetch` 的思路；代价是多一轮网络往返。我们在第一阶段就把 `CollectionStats` 和段分开、第二阶段做了多段全局统计，这里只是把「段」换成「机器」。
+**(c)** `impl<'a> IntoIterator<Item = &'a str>` 参数；`HashMap::entry().or_default()`。
+
+## 2. `strata-coord.rs`
+**(a)** axum 服务；`call_shard`：`tokio::select!` 实现对冲——主请求和一个 `sleep(hedge)` 赛跑，睡眠先结束就再发备份请求，然后两个请求赛跑；外面再套 `tokio::time::timeout` 做截止时间；`futures::future::join_all` 并发调用所有分片。
+**(b)**
+- 为什么哈希分片：均匀、无需目录服务；代价是范围查询/扩容要重分布（一致性哈希能减少迁移，未做）。
+- 为什么对冲：尾延迟放大——一次查询要等**所有**分片，任何一个副本偶尔慢（GC、磁盘、邻居干扰）都会拖慢整次查询；分片越多越明显（Dean & Barroso《The Tail at Scale》）。对冲用少量额外请求换短得多的尾巴；实测（BENCHMARK 第七阶段）：对冲阈值 5 ms 时额外分片请求 1.67%，15 ms 时 1.26%；p99 从 56.3 ms 降回 9.3 ms（健康基线 9.0 ms）。
+- 部分结果：可用性优先——宁可少一个分片的结果，也不要整个请求超时；但要明确标出来（`partial`）。统计量缺一个分片时分数也只是近似。
+**(c)** `tokio::pin!` 把 future 固定在栈上以便多次 `select!` 引用；`AtomicU64` 计数器统计对冲次数。
+
+## Stage 7 面试问答
+**Q1. 为什么分布式搜索要两阶段？** 见上：全局 IDF。单阶段（各分片用本地 IDF）在数据分布均匀时误差小但不为零；我们要求和单机**逐位一致**，所以必须两阶段。BENCHMARK 有 5 个数据集的验证。
+**Q2. 分片 top-k 怎么合并？要每个分片返回多少？** 每个分片返回自己的 top-k，全局 top-k 一定在这些候选的并集里（任何全局前 k 的文档在它所在分片里也是前 k），所以每片取 k 就够，合并是 k·分片数 的排序。注意平局：截断处多个同分文档，每个分片自己挑，所以合并后的集合可能和单机不同（分数序列完全相同）。要逐字节一致就得全局统一 tie-break（比如都按外部 id）。
+**Q3. 什么是 tail at scale？对冲请求的代价？** 扇出越大，「至少一个慢」的概率越高：单副本 p99 慢的概率 1%，100 个分片时一次查询碰到慢副本的概率约 63%。对冲：额外请求数 ≈ 超过对冲阈值的请求比例。我们实测 5 ms 阈值多了 1.67% 请求，备份请求 85% 先回；15 ms 阈值多 1.26%，但 p99 只能降到 18.2 ms（≈ 15 ms 等待 + 一次正常响应）——阈值越小尾巴越短、成本越高。风险：系统整体过载时对冲会放大负载，所以要限流（未做）。
+**Q4. 写入怎么保证副本一致？** 这一阶段协调器同步写所有副本、全部成功才 ack——没有共识，协调器崩溃或副本写失败会让副本分叉。第八阶段用 Raft 解决。
+**Q5. 超时和部分结果如何选择？** 截止时间按 SLA 设定（例如 p99 的几倍）；超时的分片计入 failed_shards；客户端可以决定接受部分结果或重试。
+**Q6. 为什么用 FNV 哈希？** 简单、快、确定（不能用 Rust 默认的随机化 SipHash，那样每次进程启动分片不同）。
+**Q7. 你怎么证明分布式结果和单机一样？** proptest：随机语料哈希分片、合并全局统计量，每篇文档分数和单个大索引逐位相等；BEIR：4 分片集群跑全部测试查询（k=1000），5 个数据集的 nDCG@10/R@100/R@1000/MRR@10 和单机到小数点后 6 位相同，top-100 全部一致、分数差为 0。top-1000 有 133/2306 个查询不同——`tie_analysis.py` 证明全是第 1000 名处「同分文档选哪个」的差别（每个分片各自打破平局）。
+**Q8. 本阶段局限？** 所有进程跑在一台笔记本上（没有真实网络延迟和故障）；副本靠协调器双写（无共识）；没有重平衡/扩容；没有对冲限流；dense/hybrid 的跨分片合并只是按相似度合并各分片 HNSW 结果。
+
+## 3. `scripts/tie_analysis.py`
+**(a)** 读两个 TREC run，对每个不同的查询检查：逐名次的分数序列是否相同；除截断处那一组同分外，每个分数组里的文档集合是否相同。有一个查询不满足就以非零退出。
+**(b)** 「结果不一样」时不要只说「大概是平局」——写脚本证明。这是本阶段 parity 结论能站住的关键：差异 100% 可解释，且指标完全相同。
+**(c)** `collections.defaultdict(set)` 按分数分组；分数用字符串比较（run 文件里已是最短往返格式，避免浮点误差）。

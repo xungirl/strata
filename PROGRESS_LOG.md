@@ -35,3 +35,9 @@
 - Headline: closed-loop lexical search 11,840 ± 93 req/s at 64 clients (p50 5.1 ms), 1,827 req/s at 1 client (p50 0.48 ms); hybrid ~4,990 req/s (`results/stage6/tables.md`).
 - Headline: open loop at 4,000 req/s p50 0.47 ms / p99 1.53 ms with generator send-lag p99 0.10 ms; HTTP + gRPC APIs, Prometheus metrics, OTel spans verified via stdout exporter.
 - Caveats: server and load generator share one 8-core laptop; open-loop generator fixed twice (superseded runs kept); ingest bound by single-threaded HNSW inserts (2,221 docs/s); OTLP export not tested against a collector; no auth/backpressure.
+
+## Stage 7: Distributed (tag `stage-7`)
+- Tests: 99 tests, 10/10 consecutive green runs (`results/stage7/test_10x.txt`); clippy -D warnings + fmt clean.
+- Headline: 4-shard cluster with two-phase global IDF gives identical nDCG@10/R@100/R@1000/MRR@10 (6 decimals) to single node on 5/5 BEIR datasets; top-100 identical for 100% of queries; top-1000 differences (133/2,306) are all cutoff ties (`results/stage7/parity/`).
+- Headline: hedging at 5 ms cuts p99 from 56.3 to 9.3 ms (healthy 9.0) against a replica slowed 5% × 50 ms, for 1.67% extra shard requests; partial results within 0.50 s under a 500 ms deadline (`results/stage7/tables.md`).
+- Caveats: everything on one laptop over localhost; replicas synced by coordinator double-writes (no consensus); healthy baseline p99.9 noisy (58.9 ± 23.8 ms) from shared machine; no rebalancing or hedge budget.

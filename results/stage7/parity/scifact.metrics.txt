@@ -1,0 +1,1 @@
+scifact	queries=300	partial=0	nDCG@10=0.6777	R@100=0.9253

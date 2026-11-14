@@ -4,7 +4,7 @@
 
 strata is inspired by Lucene/Tantivy (segment architecture, inverted index, block-max WAND) and Qdrant (HNSW), but the engine is our own code: Tantivy shows up only as a comparison baseline in a separate bench crate. The project is built **incrementally over 10 stages**. Every number in this README was measured on one machine; see [BENCHMARK.md](BENCHMARK.md).
 
-> Status: stages 1-6 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid retrieval (RRF and weighted fusion, plus a local cross-encoder re-ranker) is evaluated with paired significance tests. It runs as a service: HTTP + gRPC, Prometheus metrics, OpenTelemetry spans, and its own open- and closed-loop load generator. Sharding comes in stage 7.
+> Status: stages 1-7 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid retrieval (RRF and weighted fusion, plus a local cross-encoder re-ranker) is evaluated with paired significance tests. It runs as a service: HTTP + gRPC, Prometheus metrics, OpenTelemetry spans, and its own open- and closed-loop load generator. Stage 7 shards it behind a coordinator (two-phase scatter-gather with global IDF, verified equal to single node on BEIR; deadlines, partial results, hedged requests). Replication (Raft) comes in stage 8.
 
 ---
 
@@ -190,6 +190,42 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 2. *The load generator lied, twice.* Timer granularity added ~1 ms to open-loop latencies. Then spinning on a tokio worker starved response handling (send-lag p99 31 ms). Fixed with a dedicated scheduler thread, and the send lag is now reported next to every result. Superseded runs are kept.
 3. *Ingest is HNSW-bound.* Documented; parallel/batched graph inserts are future work.
 
+### Stage 7: Distributed (done)
+
+**Goal.** Split the index across shards behind a coordinator, and prove that sharded results equal single-node results. Then handle slow and dead shards: deadlines, partial results, and hedged requests measured against an injected slow replica.
+
+**Decisions and alternatives considered.**
+
+| decision | chosen | alternatives | why |
+|---|---|---|---|
+| partitioning | hash by doc id, FNV-1a % shards | range partitioning; consistent hashing | even spread, no directory service; FNV is deterministic across processes (Rust's default SipHash is randomly seeded) |
+| scoring across shards | two phases: gather N / total tokens / df for the query terms, then search with those global statistics | local IDF per shard (one round trip, scores differ); a central statistics service | exact single-node scores (bit-identical), at the cost of one extra round trip |
+| merge | each shard returns its top-k, coordinator sorts by score then id | ask shards for more than k | any global top-k doc is in its own shard's top-k, so k per shard is enough |
+| slow shards | per-call deadline, `partial: true` + `failed_shards` | fail the whole request; wait forever | availability first, but say so explicitly |
+| tail latency | hedged request to the next replica after a fixed delay (`tokio::select!`) | always send to all replicas; adaptive (p95-based) delay | a few % extra load instead of 2x |
+| replication in this stage | coordinator writes every replica | consensus | deliberately simple; replaced by Raft in stage 8 |
+
+**Built.**
+- `ScoringStats` (`strata-query/src/stats.rs`), with stats-aware variants of MaxScore, BMW and the exhaustive scorers, plus `Snapshot::search_scored`.
+- Server: `POST /v1/stats`, `global_stats` and `plain` fields on search requests.
+- New binary `strata-coord`: scatter-gather, routing, deadlines, hedging, counters at `/coord/stats`.
+- `strata-load run-queries` now runs BEIR queries through any HTTP endpoint.
+- `scripts/run_stage7.sh` and `scripts/tie_analysis.py`.
+
+**Verified.**
+- A proptest: random hash partitions into 2-4 shards, scored with merged statistics, give bit-identical scores to one index.
+- An end-to-end engine test, with a negative control showing that local statistics give different scores.
+- On BEIR (5 datasets, all test queries, k=1000), a 4-shard cluster gives the same nDCG@10 / R@100 / R@1000 / MRR@10 as the stage-1 run, to 6 decimals. Top-100 lists are identical for 100% of queries, and score difference is 0.
+
+**Measured** (fiqa, 2 shards × 2 replicas, open loop 200 req/s, 3 runs). One replica delays 5% of its searches by 50 ms:
+- Without hedging, p99 rises from 9.0 ms (healthy) to 56.3 ms.
+- Hedging after 5 ms brings p99 back to 9.3 ms, for 1.67% extra shard requests.
+- A shard that is 3 s slow behind a 500 ms deadline still gets an answer in 0.50 s, flagged partial.
+
+**Problems hit and fixes.**
+1. *Run files were not byte-identical to stage 1.* 133 of 2,306 queries differ in their top-1000 list. I wrote `tie_analysis.py` to prove that every difference is a different choice among equal-score documents at rank 1000 (each shard breaks ties on its own). Metrics are unaffected.
+2. *The healthy baseline is noisy at p99.9* (58.9 ± 23.8 ms) because the laptop is shared with other workloads. So I compare configurations by p99, and say so.
+
 ### Key metrics
 
 | metric | value | how measured | source file |
@@ -220,10 +256,13 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 | Service throughput (fiqa, localhost, shared 8 cores) | lexical 11,840 ± 93 req/s @64 clients (p50 5.1 ms); 1,827 req/s @1 client (p50 0.48 ms); hybrid 4,989 req/s @64 | `strata-load` closed loop, 3 runs | `results/stage6/tables.md` |
 | Open-loop latency at 4,000 req/s | p50 0.47 ms, p99 1.53 ms, p99.9 7.5 ms; generator send-lag p99 0.10 ms | `strata-load --loop open`, 3 runs | `results/stage6/load/open.*.json` |
 | Structured queries (k=10 p50) | phrase 157-207 µs, boolean 258-283 µs, prefix 79-804 µs (p99 up to 18.6 ms) | `strata-qbench` | `results/stage3/qbench/` |
-| Tests | 48 tests (unit + proptest vs brute force), 10/10 consecutive passes | `cargo test --workspace` ×10 | `results/test_10x.txt` |
+| Sharded = single node (4 shards, global IDF) | same nDCG@10 / R@100 / R@1000 / MRR@10 to 6 decimals on 5/5 datasets; top-100 identical for 100% of queries; top-1000 differences are only cutoff ties (133/2,306 queries) | `run_stage7.sh` + `compare_runs.py` + `tie_analysis.py` | `results/stage7/parity/` |
+| Hedged requests (1 replica slow 5% × 50 ms) | p99 56.3 → 9.3 ms (healthy 9.0 ms) with 1.67% extra shard requests (hedge at 5 ms) | `strata-load --loop open` 200 req/s, 3 runs | `results/stage7/tables.md` |
+| Partial results | 3 s-slow shard behind a 500 ms deadline: answer in 0.50-0.51 s, `partial: true` | `curl` ×3 | `results/stage7/partial/` |
+| Tests | 99 tests (unit + proptest vs brute force / single index, end-to-end API tests), 10/10 consecutive passes at stage 7 | `cargo test --workspace` ×10 | `results/stage7/test_10x.txt` (earlier stages: `results/stage*/test_10x.txt`) |
 
 ### Next steps
-Stage 7: distribution. Hash sharding behind a coordinator that does two-phase scatter-gather with global IDF, and proof that sharded results equal single-node results on BEIR. Then partial results on timeout, and hedged requests measured against an injected slow replica.
+Stage 8: replication. A Raft-replicated log per shard (own implementation), leader failover timed over many kills, a chaos test with 0 acknowledged-write loss, and a linearizable (ReadIndex) read check.
 
 ## Architecture
 
@@ -303,6 +342,12 @@ target/release/strata-server --dir data/node --http 127.0.0.1:7700 --grpc 127.0.
 target/release/strata-load search --url http://127.0.0.1:7700 --queries data/fiqa/queries.jsonl --loop open --rate 2000
 scripts/run_stage6.sh                    # every stage-6 number
 
+# stage 7: two shards behind a coordinator (global IDF, 1 s deadline, hedge after 5 ms)
+target/release/strata-server --dir data/s0 --http 127.0.0.1:7711 &
+target/release/strata-server --dir data/s1 --http 127.0.0.1:7712 &
+target/release/strata-coord --listen 127.0.0.1:7800 --shards "http://127.0.0.1:7711;http://127.0.0.1:7712" --timeout-ms 1000 --hedge-ms 5
+scripts/run_stage7.sh                    # every stage-7 number
+
 scripts/run_all.sh                       # everything in BENCHMARK.md (9.5 min on this M2)
 python3 -I scripts/make_tables.py        # regenerate the tables from results/*.json
 ```
@@ -336,6 +381,7 @@ println!("{} {}", segment.external_id(hits[0].doc), hits[0].score);
 - Vectors: single-threaded HNSW build; no PQ; filtered ANN switches strategies by a fixed threshold; the vector index is separate from the lexical segments (no shared WAL yet).
 - Hybrid: fusion parameters are fixed, not tuned on dev splits; re-ranking runs offline in Python.
 - Service: no auth, rate limiting or backpressure; lexical WAL and vector log are two separate fsyncs (not one atomic commit); HNSW is rebuilt on start; load generator and server share the machine.
+- Distributed: all shards on one laptop (no real network or machine failures); replicas kept in sync by the coordinator writing to all of them (no consensus until stage 8); no rebalancing; hedging has no budget/limit; dense/hybrid merge across shards is exact only for exact vector search.
 - MS MARCO and other large BEIR sets were deliberately not run (disk budget).
 
 ## Roadmap
@@ -348,17 +394,17 @@ The project is built incrementally; each stage ends with tests, measured numbers
 - [x] **4. Vector index:** own HNSW, SIMD distance, int8 scalar quantization (+ optional product quantization), filtered ANN; recall@10 vs latency curves vs brute force.
 - [x] **5. Hybrid retrieval:** RRF + weighted/normalized fusion, optional cross-encoder rerank; BEIR nDCG lexical vs dense vs hybrid.
 - [x] **6. Single-node service:** axum HTTP + gRPC (tonic) API, bulk ingest, Prometheus metrics, OpenTelemetry tracing, own load tester.
-- [ ] **7. Distributed:** sharding (hash by doc id), coordinator scatter-gather top-k merge with global IDF, partial-result timeouts / hedged requests.
+- [x] **7. Distributed:** sharding (hash by doc id), coordinator scatter-gather top-k merge with global IDF, partial-result timeouts / hedged requests.
 - [ ] **8. Replication:** Raft-replicated WAL per shard (openraft or own), leader failover, read replicas; chaos tests with 0 acknowledged-write loss.
 - [ ] **9. Agent integration:** MCP server (search/ingest tools), agent memory use-case demo, eval of retrieval quality on agent tasks.
 - [ ] **10. Ops & polish:** Docker/compose files (documented, not required to run), dashboards, capacity/perf report, architecture doc.
 
 ## What the next stage should watch out for
 
-- Per-shard BM25 statistics make sharded scores differ from single-node scores. Collect global N/avgdl/df first (two phases) and verify bit equality on BEIR.
-- Run files must keep exact f32 scores across JSON hops (shortest round-trip formatting, then parse back through f32).
-- Tail experiments need a controlled fault (an injected delay on one replica) and a no-fault baseline. Report the extra requests that hedging costs.
-- Everything still runs on one laptop: no real network, no real failures. Say so.
+- Raft safety depends on persisting the term/vote and log entries **before** sending messages; test the pure algorithm with randomized schedules (loss, duplication, partitions, crashes), not only the real cluster.
+- Acknowledge a write only after it is committed and applied; a failed or timed-out write is *indeterminate* (it may still commit), so the chaos check may only count acknowledged writes.
+- Reads: a leader can be deposed without knowing it. Linearizable reads need ReadIndex (or leases); a plain follower read can be stale.
+- Failover time depends on the election timeout; measure from SIGKILL to the next acknowledged write, over ≥ 20 kills.
 
 ## License
 

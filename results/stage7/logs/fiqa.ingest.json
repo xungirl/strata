@@ -1,0 +1,1 @@
+{"batch":1000,"batch_latency":{"errors":0,"max_ms":404.240875,"p50_ms":64.580916,"p90_ms":135.245791,"p999_ms":404.240875,"p99_ms":404.240875,"requests":58,"seconds":1.242833958,"throughput_rps":46.667537225435225},"concurrency":4,"dataset":"fiqa","docs":57638,"docs_per_sec":38892.279459515215,"ingest_secs":1.242833958,"with_commit_secs":1.4819907909999999,"with_vectors":false}

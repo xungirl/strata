@@ -1,0 +1,1 @@
+nfcorpus	queries=323	partial=0	nDCG@10=0.3202	R@100=0.2456

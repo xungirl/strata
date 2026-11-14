@@ -1,0 +1,5 @@
+queries: 1000; lists differ: 76
+  differences explained by score ties only: 76
+    same docs, different order inside a tie group: 0
+    different docs chosen from the tie group at the cutoff: 76
+  NOT explained by ties: 0 []

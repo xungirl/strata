@@ -1,0 +1,4 @@
+date: 2026-11-14T05:10:28Z
+git: ecee6c3
+uptime: 21:10  up 65 days, 21:10, 4 users, load averages: 19.50 12.05 7.47
+all nodes, coordinator and load generator on one machine (localhost)

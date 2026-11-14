@@ -1,0 +1,12 @@
+stage-1 single-node run vs 4-shard cluster run
+queries compared: 50 (only in A: 0, only in B: 0)
+identical top-1000 lists: 44/50 (88.0%)
+identical top-1000 sets:  44/50 (88.0%)
+mean overlap@1000: 0.9997
+max |score diff| on shared top-1000 docs: 0
+queries compared: 50 (only in A: 0, only in B: 0)
+identical top-100 lists: 50/50 (100.0%)
+identical top-100 sets:  50/50 (100.0%)
+mean overlap@100: 1.0000
+max |score diff| on shared top-100 docs: 0
+run files byte-identical (qid, docid, rank, score columns): NO
