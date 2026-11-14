@@ -1,0 +1,6 @@
+no-figure8-rule (commit entries of older terms by counting replicas): detected -- thread 'figure_8_old_term_entry_is_not_committed_by_counting' (91063243) panicked at crates/strata-raft/tests/sim_tests.rs:473:17:
+no-up-to-date-check (vote for any candidate): detected -- thread 'figure_8_old_term_entry_is_not_committed_by_counting' (91064147) panicked at crates/strata-raft/tests/sim_tests.rs:534:5:
+vote-twice (ignore voted_for): detected -- thread 'three_nodes_many_schedules' (91064619) panicked at crates/strata-raft/tests/sim_tests.rs:160:17:
+stale-read-index (use commit index at request time): detected -- thread 'three_nodes_many_schedules' (91065385) panicked at crates/strata-raft/tests/sim_tests.rs:150:17:
+read-without-quorum (serve ReadIndex immediately): detected -- thread 'three_nodes_many_schedules' (91066261) panicked at crates/strata-raft/tests/sim_tests.rs:150:17:
+follower-commit-unbounded (commit = leader commit): detected -- thread 'three_nodes_many_schedules' (91067411) panicked at crates/strata-raft/tests/sim_tests.rs:138:17:
