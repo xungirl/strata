@@ -41,3 +41,9 @@
 - Headline: 4-shard cluster with two-phase global IDF gives identical nDCG@10/R@100/R@1000/MRR@10 (6 decimals) to single node on 5/5 BEIR datasets; top-100 identical for 100% of queries; top-1000 differences (133/2,306) are all cutoff ties (`results/stage7/parity/`).
 - Headline: hedging at 5 ms cuts p99 from 56.3 to 9.3 ms (healthy 9.0) against a replica slowed 5% × 50 ms, for 1.67% extra shard requests; partial results within 0.50 s under a 500 ms deadline (`results/stage7/tables.md`).
 - Caveats: everything on one laptop over localhost; replicas synced by coordinator double-writes (no consensus); healthy baseline p99.9 noisy (58.9 ± 23.8 ms) from shared machine; no rebalancing or hedge budget.
+
+## Stage 8: Replication (tag `stage-8`)
+- Tests: 104 tests, 10/10 consecutive green runs (`results/stage8/test_10x.txt`); clippy -D warnings + fmt clean.
+- Headline: own Raft (pure state machine); 75 leader SIGKILLs, 53,130 acked ids, 0 lost; 0/3,750 consistent reads on the new leader missed a pre-kill ack (`results/stage8/chaos.*.json`).
+- Headline: failover p50 261 ms / p90 448 ms / max 782 ms (n=75, election timeout 150-300 ms); simulation catches 6/6 injected Raft bugs (`results/stage8/tables.md`, `mutations.txt`).
+- Caveats: one laptop, process kills only (partitions only in simulation); no snapshots/compaction, membership changes or pre-vote; Raft shard not yet behind the stage-7 coordinator; two superseded chaos runs (harness bugs) kept with explanations.

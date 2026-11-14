@@ -4,7 +4,7 @@
 
 strata is inspired by Lucene/Tantivy (segment architecture, inverted index, block-max WAND) and Qdrant (HNSW), but the engine is our own code: Tantivy shows up only as a comparison baseline in a separate bench crate. The project is built **incrementally over 10 stages**. Every number in this README was measured on one machine; see [BENCHMARK.md](BENCHMARK.md).
 
-> Status: stages 1-7 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid retrieval (RRF and weighted fusion, plus a local cross-encoder re-ranker) is evaluated with paired significance tests. It runs as a service: HTTP + gRPC, Prometheus metrics, OpenTelemetry spans, and its own open- and closed-loop load generator. Stage 7 shards it behind a coordinator (two-phase scatter-gather with global IDF, verified equal to single node on BEIR; deadlines, partial results, hedged requests). Replication (Raft) comes in stage 8.
+> Status: stages 1-8 of 10 are done. There's an analyzer, BM25, a BEIR evaluation harness cross-checked against `pytrec_eval`, a durable storage engine (WAL, compressed mmap segments, merges, deletes, snapshot readers; verified against the stage-1 index and a kill -9 chaos test), and a query engine. The query engine provides exact MaxScore and block-max WAND top-k, boolean/phrase/prefix queries, metadata filters and a query parser. It also has a vector index: its own HNSW with NEON distances, int8 quantization and filtered search, over locally computed bge-small embeddings. Hybrid retrieval (RRF and weighted fusion, plus a local cross-encoder re-ranker) is evaluated with paired significance tests. It runs as a service: HTTP + gRPC, Prometheus metrics, OpenTelemetry spans, and its own open- and closed-loop load generator. Stage 7 shards it behind a coordinator (two-phase scatter-gather with global IDF, verified equal to single node on BEIR; deadlines, partial results, hedged requests). Stage 8 replicates a shard with its own Raft implementation (simulation-tested, 0 acknowledged-write loss over 75 leader kills). The MCP agent integration comes in stage 9.
 
 ---
 
@@ -226,6 +226,49 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 1. *Run files were not byte-identical to stage 1.* 133 of 2,306 queries differ in their top-1000 list. I wrote `tie_analysis.py` to prove that every difference is a different choice among equal-score documents at rank 1000 (each shard breaks ties on its own). Metrics are unaffected.
 2. *The healthy baseline is noisy at p99.9* (58.9 ± 23.8 ms) because the laptop is shared with other workloads. So I compare configurations by p99, and say so.
 
+### Stage 8: Replication (done)
+
+**Goal.** Replicate a shard with consensus, so that losing the leader loses no acknowledged write. Measure failover over many leader kills and check reads for linearizability.
+
+**Decisions and alternatives considered.**
+
+| decision | chosen | alternatives | why |
+|---|---|---|---|
+| consensus | own Raft, written from the paper as a pure state machine (`tick` / `step` / `propose` → `Ready`) | openraft; etcd-style library | small enough to explain line by line; I/O-free, so it can be tested deterministically with randomized schedules |
+| ordering | `Ready` is handled as persist (fsync term/vote, then log) → send → apply | send and persist in parallel (etcd leader optimization) | the simplest order that is obviously safe across crashes |
+| commit | leader no-op on election + commit only current-term entries (Figure 8) | — | required for safety |
+| reads | ReadIndex on the leader (quorum heartbeat round, then wait for apply); plain reads on any replica are allowed to be stale | leader leases (clock assumptions); log every read | linearizable without clock assumptions |
+| state machine | the strata `Index`; rebuilt by replaying the committed log at start; applied on a dedicated thread | snapshots + compaction | simplest correct; growth documented |
+| transport | JSON over HTTP (axum + reqwest), fire-and-forget | gRPC streaming | Raft tolerates loss; easy to inspect |
+
+**Built.** New crate `strata-raft`:
+- `core` (the algorithm).
+- `storage` (CRC'd log + atomic hard state, torn-tail recovery).
+- `server` (replicated shard: writes, deletes, consistent reads, status).
+- Binaries `strata-raft-node` and `strata-raft-chaos`.
+- Scripts `run_stage8.sh` and `raft_mutations.sh`.
+
+**Verified.**
+- **Simulation:** 300 randomized simulated schedules (3 and 5 nodes; message loss, duplication, reordering, partitions, crash/restart from persisted state; batch sizes 1/2/64) check election safety, state-machine safety, commit durability, linearizable ReadIndex and liveness after healing. A deterministic replay of the paper's Figure 8 is included.
+- **Mutation tests:** 6 of 6 injected bugs are detected.
+- **Chaos test:** 75 SIGKILLs of the leader with 53,130 acknowledged ids: **0 lost**. 0 of 3,750 consistent reads on the new leader missed an id acknowledged before the kill.
+
+**Measured.**
+- Failover (kill → next write acknowledged by another replica): p50 261 ms, p90 448 ms, max 782 ms, with a 150-300 ms election timeout.
+- Restarted-node catch-up: p50 257 ms.
+- Follower plain reads were stale 3.9% of the time right after an ack, whereas consistent reads never were.
+
+**Problems hit and fixes.**
+1. *Stale ReadIndex after an election* (found by the simulation's read check): the leader now waits for at least its current commit index.
+2. *Catch-up chains multiplied with every heartbeat* (>10,000 messages in flight in simulation). Only replies that advance `matched` now continue a chain, and stale rejections are ignored.
+3. *Failover grew to 17 s in the first chaos run*: a restarted node replayed its log under the Raft lock and could not vote. Apply now runs on its own thread.
+4. *The harness lied twice.*
+   - It counted timeouts as lost writes (2,713 "lost" that every replica actually had).
+   - It counted the dead leader's last response as the end of failover (10-30 ms, impossible).
+
+   Both were fixed, and the superseded runs are kept with explanations.
+5. *The simulation first missed 3 of 6 injected bugs.* Partitions were made longer and batch sizes varied, and a Figure-8 replay test was added.
+
 ### Key metrics
 
 | metric | value | how measured | source file |
@@ -259,10 +302,13 @@ strata is inspired by Lucene/Tantivy (segment architecture, inverted index, bloc
 | Sharded = single node (4 shards, global IDF) | same nDCG@10 / R@100 / R@1000 / MRR@10 to 6 decimals on 5/5 datasets; top-100 identical for 100% of queries; top-1000 differences are only cutoff ties (133/2,306 queries) | `run_stage7.sh` + `compare_runs.py` + `tie_analysis.py` | `results/stage7/parity/` |
 | Hedged requests (1 replica slow 5% × 50 ms) | p99 56.3 → 9.3 ms (healthy 9.0 ms) with 1.67% extra shard requests (hedge at 5 ms) | `strata-load --loop open` 200 req/s, 3 runs | `results/stage7/tables.md` |
 | Partial results | 3 s-slow shard behind a 500 ms deadline: answer in 0.50-0.51 s, `partial: true` | `curl` ×3 | `results/stage7/partial/` |
-| Tests | 99 tests (unit + proptest vs brute force / single index, end-to-end API tests), 10/10 consecutive passes at stage 7 | `cargo test --workspace` ×10 | `results/stage7/test_10x.txt` (earlier stages: `results/stage*/test_10x.txt`) |
+| Raft chaos (3 replicas, SIGKILL the leader) | 75 kills, 53,130 acked ids, **0 lost**; 0/3,750 consistent reads on the new leader missed a pre-kill ack | `strata-raft-chaos`, 3 runs × 25 | `results/stage8/chaos.*.json` |
+| Raft failover (election timeout 150-300 ms) | p50 261 ms, p90 448 ms, max 782 ms (n=75); per-run p50 251 ± 18 ms | same | `results/stage8/tables.md` |
+| Raft simulation sensitivity | 6/6 injected bugs (Figure 8, vote checks, ReadIndex, follower commit) detected | `scripts/raft_mutations.sh` | `results/stage8/mutations.txt` |
+| Tests | 104 tests (unit + proptest vs brute force / single index, end-to-end API tests, Raft simulation), 10/10 consecutive passes at stage 8 | `cargo test --workspace` ×10 | `results/stage8/test_10x.txt` (earlier stages: `results/stage*/test_10x.txt`) |
 
 ### Next steps
-Stage 8: replication. A Raft-replicated log per shard (own implementation), leader failover timed over many kills, a chaos test with 0 acknowledged-write loss, and a linearizable (ReadIndex) read check.
+Stage 9: agent integration. An MCP server exposing remember/recall/search/forget tools over strata, an agent-memory demo, and a retrieval evaluation on an agent-memory benchmark (LoCoMo).
 
 ## Architecture
 
@@ -382,6 +428,7 @@ println!("{} {}", segment.external_id(hits[0].doc), hits[0].score);
 - Hybrid: fusion parameters are fixed, not tuned on dev splits; re-ranking runs offline in Python.
 - Service: no auth, rate limiting or backpressure; lexical WAL and vector log are two separate fsyncs (not one atomic commit); HNSW is rebuilt on start; load generator and server share the machine.
 - Distributed: all shards on one laptop (no real network or machine failures); replicas kept in sync by the coordinator writing to all of them (no consensus until stage 8); no rebalancing; hedging has no budget/limit; dense/hybrid merge across shards is exact only for exact vector search.
+- Replication: Raft has no log compaction or snapshots (restart replays the whole log; the log grows forever), no membership changes, no pre-vote; the Raft shard is a separate binary not yet wired behind the stage-7 coordinator; only process kills were tested in the real cluster (partitions only in simulation); macOS fsync is not `F_FULLFSYNC`; linearizability is checked with targeted read checks, not a full history checker.
 - MS MARCO and other large BEIR sets were deliberately not run (disk budget).
 
 ## Roadmap
@@ -395,16 +442,16 @@ The project is built incrementally; each stage ends with tests, measured numbers
 - [x] **5. Hybrid retrieval:** RRF + weighted/normalized fusion, optional cross-encoder rerank; BEIR nDCG lexical vs dense vs hybrid.
 - [x] **6. Single-node service:** axum HTTP + gRPC (tonic) API, bulk ingest, Prometheus metrics, OpenTelemetry tracing, own load tester.
 - [x] **7. Distributed:** sharding (hash by doc id), coordinator scatter-gather top-k merge with global IDF, partial-result timeouts / hedged requests.
-- [ ] **8. Replication:** Raft-replicated WAL per shard (openraft or own), leader failover, read replicas; chaos tests with 0 acknowledged-write loss.
+- [x] **8. Replication:** Raft-replicated WAL per shard (openraft or own), leader failover, read replicas; chaos tests with 0 acknowledged-write loss.
 - [ ] **9. Agent integration:** MCP server (search/ingest tools), agent memory use-case demo, eval of retrieval quality on agent tasks.
 - [ ] **10. Ops & polish:** Docker/compose files (documented, not required to run), dashboards, capacity/perf report, architecture doc.
 
 ## What the next stage should watch out for
 
-- Raft safety depends on persisting the term/vote and log entries **before** sending messages; test the pure algorithm with randomized schedules (loss, duplication, partitions, crashes), not only the real cluster.
-- Acknowledge a write only after it is committed and applied; a failed or timed-out write is *indeterminate* (it may still commit), so the chaos check may only count acknowledged writes.
-- Reads: a leader can be deposed without knowing it. Linearizable reads need ReadIndex (or leases); a plain follower read can be stale.
-- Failover time depends on the election timeout; measure from SIGKILL to the next acknowledged write, over ≥ 20 kills.
+- MCP over stdio: stdout is the protocol channel, so every log line must go to stderr.
+- Agent-memory evaluation needs a public dataset with ground-truth evidence (LoCoMo has evidence dialogue ids per question); check its license and keep it out of the repo.
+- No LLM calls unless necessary. If one is used, read the key at runtime only, never log it, cap the number of calls, and keep a fake provider for tests.
+- Report recall of the gold evidence, not just "it answers": retrieval quality is what strata controls.
 
 ## License
 

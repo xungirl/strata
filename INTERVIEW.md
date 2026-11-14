@@ -905,3 +905,63 @@ client ──► strata-coord
 **(a)** 读两个 TREC run，对每个不同的查询检查：逐名次的分数序列是否相同；除截断处那一组同分外，每个分数组里的文档集合是否相同。有一个查询不满足就以非零退出。
 **(b)** 「结果不一样」时不要只说「大概是平局」——写脚本证明。这是本阶段 parity 结论能站住的关键：差异 100% 可解释，且指标完全相同。
 **(c)** `collections.defaultdict(set)` 按分数分组；分数用字符串比较（run 文件里已是最短往返格式，避免浮点误差）。
+
+---
+
+# Stage 8：复制（Replication，自己写的 Raft）
+
+> 新文件：`crates/strata-raft/src/core.rs`（算法）、`storage.rs`（持久化）、`server.rs`（复制分片）、`bin/strata-raft-node.rs`、`bin/strata-raft-chaos.rs`、`tests/sim_tests.rs`、`scripts/raft_mutations.sh`、`scripts/run_stage8.sh`、`scripts/make_tables_stage8.py`。
+> 教学顺序：`core.rs → tests/sim_tests.rs → storage.rs → server.rs → strata-raft-chaos.rs`
+
+## 全局图
+
+```
+client ─POST /v1/documents─► leader: propose(cmd) → 日志追加
+            Ready 顺序：① 持久化（先 term/vote，再日志，fsync） ② 发消息 ③ 交给 applier 线程
+            followers: 收到 Append → 一致性检查 → 追加+fsync → 回 AppendReply
+            leader: 多数派 matched ≥ i 且 term(i)==当前 term → commit=i
+            applier 线程按顺序把已提交的条目应用到 strata Index → 唤醒等待的写请求 → 200
+读：?consistent=true → ReadIndex（一轮多数派心跳确认我仍是 leader）→ 等 applied ≥ readIndex → 读
+```
+
+## 1. `core.rs`（纯状态机）
+**(a)** `RaftNode` 没有线程、时钟、I/O：`tick()` 推进逻辑时间，`step(Envelope)` 处理消息，`propose()` 追加命令，`read_index()` 开始线性一致读；所有「要做的事」放进 `Ready{hard_state, truncate_from, append, messages, committed, reads}`，由调用者按顺序执行。
+**(b)**
+- 为什么纯状态机（etcd/raft 的设计）：可以在测试里完全控制消息顺序、丢包、崩溃，跑几百种随机调度并检查安全性；网络/磁盘代码和算法分开，各自好测。
+- 选举：随机超时（防止一直平票）；投票要求候选人日志「至少一样新」（先比最后一条的 term，再比 index）——否则会选出缺少已提交条目的 leader（变异测试 `no-up-to-date-check` 证明测试能抓到）。
+- 提交规则（论文 Figure 8）：leader 只能通过「数副本」提交**当前任期**的条目；旧任期条目随之间接提交。所以新 leader 一上任就追加一条空的 no-op。
+- 冲突回退：follower 拒绝时给 hint（冲突任期的第一个 index），leader 一次跳过整个任期。
+- 只有让 `matched` 前进的回复才继续发下一批——否则每次心跳都开一条新的追赶链，消息数爆炸（模拟里见过 >10,000 条在途消息）。
+**(c)** `std::mem::take(&mut self.ready)` 取走并重置；`HashMap<NodeId, Progress>`；`matches!` 宏；xorshift 随机数（确定性、可复现）。
+
+## 2. `tests/sim_tests.rs`（随机模拟 + Figure 8 回放）
+**(a)** 模拟网络：随机顺序投递（乱序）、10% 丢包、5% 重复、分区；节点崩溃后**只用持久化的状态**重启。检查：每个任期最多一个 leader；所有节点第 k 个应用的条目相同；leader 报告提交的条目最终不变；ReadIndex 读的 index ≥ 读开始前所有已确认写；恢复后能继续提交。
+**(b)**
+- 为什么变异测试：测试通过不代表测试有用。故意注入 6 个经典 bug，6/6 都让测试失败。第一版只抓到 3 个——分区太短（选不出新 leader）、批量 64 掩盖了部分复制；改成按种子变化分区时长和批量 1/2/64 后抓到 5 个；Figure 8 那个随机调度很难碰到，所以写了确定性回放。
+- 网络模型也要合理：一开始每步只投递 1 条消息，消息产生得比投递快，积压上万条，所有投票都超时——测不出任何东西。改为容量随积压增长（每 100 条积压多投递 1 条）。
+**(c)** `assert!(..., "seed {}")` 把种子写进失败信息，`SIM_SEED=n` 可单独重放。
+
+## 3. `storage.rs`
+**(a)** `hard_state.json`（tmp + fsync + rename + 目录 fsync）；`raft.log` 每条 `len | crc32 | JSON`；打开时遇到坏的尾巴就截断。
+**(b)** 先写 hard state 再写日志：保证磁盘上的 term 永远 ≥ 日志里任何条目的 term。截断尾巴是安全的：没 fsync 完成的条目从没被确认给任何人。
+**(c)** `File::set_len` 截断；`OpenOptions::truncate(false)` 明确不清空。
+
+## 4. `server.rs`
+**(a)** axum：`/raft/msg`（节点间）、`/v1/documents`（写，非 leader 返回 421 + leader 地址）、`/v1/documents/{id}?consistent=true`、`/raft/status`。applier 线程通过 channel 接收已提交条目，连续 upsert 合并成一批写进 Index。
+**(b)** 写请求要等「提交 + 本机应用」才返回 200。失败/超时的写是**不确定**的（可能之后仍会提交），所以混沌测试只检查已确认的写。第一版在 Raft 锁里应用条目：重启的节点重放几千条（每条一次 fsync）时无法投票，故障转移时间涨到 17 秒。
+**(c)** `std::sync::mpsc::channel` + 专用线程；`tokio::sync::watch` 发布 applied index；`oneshot` 回复等待的写请求。
+
+## 5. `strata-raft-chaos.rs`
+**(a)** 3 个节点进程；写线程不停写；每轮杀 leader（SIGKILL）→ 计时到「另一个副本」确认写 → 在新 leader 上一致读被杀 leader 最后确认的 50 个 id → 重启 → 等全部追上 → 下一轮。最后逐个核对所有已确认 id。
+**(b)** 测量本身也会错：第二版把「杀之后收到的第一个 200」当成故障转移结束，但那可能是旧 leader 死前发出的回复——得到 10-30 ms 这种不可能的数字（选举超时最少 150 ms）。修正：必须是别的副本确认。
+**(c)** `std::process::Child::kill()`（SIGKILL）+ `wait()`。
+
+## Stage 8 面试问答
+**Q1. 为什么自己写 Raft 而不用 openraft？** 学习和可解释性：每一行都能讲；纯状态机可以做确定性模拟测试。代价：没有快照/日志压缩、成员变更、pre-vote——生产环境我会用成熟实现。
+**Q2. 什么是 Figure 8 问题？** 旧任期的条目即使已经复制到多数派，也可能被后来的 leader 覆盖（因为那个 leader 的最后一条 term 更大）。所以只按当前任期条目计数提交。测试 `figure_8_old_term_entry_is_not_committed_by_counting` 一步步重放这个场景。
+**Q3. 怎么保证已确认的写不丢？** 先 fsync 再发消息/回复；多数派持久化才算提交；选举要求日志最新，所以新 leader 一定有所有已提交条目。实测 75 次杀 leader、53,130 个已确认 id，丢失 0。
+**Q4. leader 上的读为什么不一定线性一致？** 被网络隔离的旧 leader 不知道自己已经被替换，会返回旧数据。ReadIndex：记下 commit index，发一轮心跳得到多数派确认，再等本地应用到那个 index。还有一个坑：新 leader 在本任期第一次提交前不知道真正的 commit index——我们的模拟测试就是在这里抓到了一个真实的 bug。
+**Q5. follower 读会怎样？** 可能读到旧数据：实测确认后立刻在另一个副本普通读，3.9% 读不到。想要 follower 线性一致读，需要 follower 向 leader 要 ReadIndex。
+**Q6. 故障转移时间由什么决定？** 选举超时（150-300 ms）+ 一轮投票 + 一次提交。实测 p50 261 ms、p90 448 ms、最大 782 ms；尾巴可能是平票需要再等一轮超时（没有专门测量确认）。缩短办法：更短的超时（误判风险更大）、pre-vote、主动 leadership transfer。
+**Q7. 节点重启后怎么恢复？** 从 Raft 日志重建索引：commit index 从 0 开始，leader 告诉它真正的 commit，applier 重放。没有快照所以时间随日志增长（这里 p50 257 ms）。生产需要定期快照 + 截断日志。
+**Q8. 你怎么知道测试能抓到 bug？** 变异测试：注入 6 个已知 bug（Figure 8、投票检查、重复投票、过期 ReadIndex、不经多数派的读、follower 越界提交），6/6 被抓。还保留了两次被推翻的混沌测试结果和原因——证明数字是可信的过程比数字本身更重要。

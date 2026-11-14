@@ -790,3 +790,77 @@ Replica 7721 (shard 0) sleeps 50 ms before 5% of the `/v1/search` calls it recei
 - **Partial results.** A shard that delays every search by 3 s, behind a 500 ms deadline: the coordinator answers in 0.50-0.51 s (3 tries) with `partial: true`, `failed_shards: [1]` and the hits of the healthy shard. A shard that is not running at all fails immediately (connection refused, wall time ≈ 0) with the same flags. When a shard is missing, its statistics are missing too, so the returned scores are approximate; that is why the response is marked partial.
 - **Not measured here:** cross-machine latency, coordinator throughput limits, dense/hybrid merge quality across shards (dense mode merges the per-shard HNSW top-k by similarity, which is exact for exact search and approximate for HNSW), rebalancing.
 - Tests: 99 tests, 10/10 consecutive green runs (`results/stage7/test_10x.txt`).
+
+# Stage 8: replication (own Raft)
+
+Measured by `scripts/run_stage8.sh` (chaos) and `scripts/raft_mutations.sh` (negative controls); tables rendered by `scripts/make_tables_stage8.py` (`results/stage8/tables.md`). One shard is replicated on **3 `strata-raft-node` processes on the same laptop** (localhost HTTP between them). Each node: 10 ms tick, heartbeat every 5 ticks (50 ms), election timeout drawn from 15-30 ticks (150-300 ms), every log append and hard-state change fsynced before messages are sent. Each run was gated on 1-minute load < 4 (2.95-3.13, `results/stage8/load.log`).
+
+```
+date: 2026-11-14T06:19:15Z
+git: 0ea4f74
+uptime: load averages 2.95 3.40 4.33
+3 strata-raft-node processes + chaos client on one machine (localhost); tick 10 ms, heartbeat 50 ms, election timeout 150-300 ms
+```
+
+What the chaos client (`strata-raft-chaos`) does:
+- A writer upserts batches of 10 new ids in a loop, following "not leader" redirects. A write counts as **acknowledged** only on HTTP 200, which the leader sends after the entry is committed (fsynced on a majority) and applied.
+- After every ack, it does a linearizable read (ReadIndex) of one id from the batch, plus a plain read on another replica as a contrast.
+- Each round:
+  - Find the leader and SIGKILL it.
+  - Time how long until a write is acknowledged by a *different* replica.
+  - On the new leader, consistent-read the last 50 ids acknowledged before the kill.
+  - Restart the killed node, and wait until every replica has applied the commit index (the catch-up time is reported separately).
+- At the end, every acknowledged id is checked with a consistent read and with plain reads on all three replicas. A check that gets no definite answer after 10 tries is counted as "unverified".
+
+### Leader-kill chaos test (3-node shard, SIGKILL the leader, 25 kills per run, 3 runs)
+
+| run | kills | acked writes (ids) | lost acked ids | unverified | read-after-ack (consistent) violations / checks | read-after-failover violations / checks | follower plain-read misses / checks | failover p50 / max ms | catch-up p50 / max ms | replicas missing acked ids |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 25 | 17620 | 0 | 0 | 0 / 1749 | 0 / 1250 | 54 / 1063 | 251 / 512 | 257 / 552 | [0, 0, 0] |
+| 2 | 25 | 17700 | 0 | 0 | 0 / 1756 | 0 / 1250 | 42 / 1243 | 233 / 693 | 261 / 521 | [0, 0, 0] |
+| 3 | 25 | 17810 | 0 | 0 | 0 / 1772 | 0 / 1250 | 40 / 1154 | 268 / 782 | 258 / 567 | [0, 0, 0] |
+| **total** | 75 | 53130 | 0 | 0 | 0 / 5277 | 0 / 3750 | 136 / 3460 | | | |
+
+### Failover time distribution (SIGKILL of the leader -> next write acknowledged by another replica)
+
+| quantity | n | min | p50 | p90 | max | mean ± std | per-run p50 (mean ± std of 3) |
+|---|---|---|---|---|---|---|---|
+| failover ms | 75 | 182 | 261 | 448 | 782 | 288 ± 117 | 251 ± 18 |
+| restarted node catch-up ms | 75 | 116 | 257 | 390 | 567 | 276 ± 110 | 258 ± 2 |
+
+### Mutation tests (inject a known Raft bug, expect the simulation tests to fail)
+
+| injected bug | result |
+|---|---|
+| no-figure8-rule (commit entries of older terms by counting replicas) | detected (crates/strata-raft/tests/sim_tests.rs:473:17) |
+| no-up-to-date-check (vote for any candidate) | detected (crates/strata-raft/tests/sim_tests.rs:534:5) |
+| vote-twice (ignore voted_for) | detected (crates/strata-raft/tests/sim_tests.rs:160:17) |
+| stale-read-index (use commit index at request time) | detected (crates/strata-raft/tests/sim_tests.rs:150:17) |
+| read-without-quorum (serve ReadIndex immediately) | detected (crates/strata-raft/tests/sim_tests.rs:150:17) |
+| follower-commit-unbounded (commit = leader commit) | detected (crates/strata-raft/tests/sim_tests.rs:138:17) |
+
+## Reading the numbers
+
+- **0 acknowledged writes lost** over 75 leader kills (53,130 acknowledged ids). Every replica holds every acknowledged id at the end, and no check was left unverified.
+- **No linearizability violation was observed.**
+  - 0 of 3,750 consistent reads on a *new* leader missed an id the killed leader had acknowledged.
+  - 0 of 5,277 read-after-ack checks failed.
+  - In contrast, plain (non-linearizable) reads of a just-acknowledged id on another replica missed it 136 of 3,460 times (3.9%). Follower reads are stale for a moment, which is why the consistent path exists.
+  - "Linearizability-ish": these are targeted checks, not a full history checker such as Knossos or Porcupine.
+- **Failover** (SIGKILL to the next write acknowledged by another replica), over 75 kills: p50 261 ms, p90 448 ms, max 782 ms (per-run p50 251 ± 18 ms).
+  - The floor is the election timeout: a follower waits 150-300 ms without heartbeats before campaigning.
+  - The 400-800 ms tail is consistent with split votes needing another timeout round, but this was not instrumented to confirm it.
+  - Pre-vote and leadership transfer (not implemented) are the usual ways to shorten or avoid this.
+- **Catch-up** of the restarted node (it rebuilds its index from the Raft log, as there are no snapshots): p50 257 ms, max 567 ms at this log size (about 1,770 acknowledged write entries per run, each a batch of 10 docs). It grows with the log; log compaction is not implemented.
+- **The simulation tests catch the classic bugs** (`scripts/raft_mutations.sh`): all 6 injected bugs fail the tests. They are the Figure-8 commit rule, the up-to-date vote check, double voting, stale ReadIndex, ReadIndex without a quorum, and follower commit beyond the matched prefix.
+  - Three of them were *not* caught by the first version of the simulation (the Figure-8 rule, ReadIndex without a quorum, unbounded follower commit). Partitions were too short for an election to happen while the old leader was cut off, and 64-entry batches hid partial replication.
+  - The fixes were longer partitions on half of the seeds and batch sizes 1/2/64 across seeds. That caught the last two. The Figure-8 rule is caught only by a deterministic replay of the paper's Figure 8: the randomized schedules alone did not produce that interleaving.
+  - The simulation runs 300 randomized schedules (3 and 5 nodes) with message loss (10%), duplication (5%), reordering, partitions and crash/restart from persisted state.
+- **Two bugs found and fixed through testing:**
+  1. *ReadIndex could return a commit index from before the leader's first commit in its term* (a possible stale read right after an election). It now waits for at least the current commit index.
+  2. *Catch-up message amplification*: every heartbeat to a lagging follower started another catch-up chain. Over 10,000 messages ended up in flight in the 1-entry-batch simulation.
+- **Superseded chaos runs** are kept with explanations:
+  - `results/stage8/superseded_v1/`: the state machine was applied under the Raft lock, so a catching-up node could not vote, and failover times grew to 17 s. The final check also counted timeouts as "lost".
+  - `results/stage8/superseded_v2/`: failover was measured to the first ack *after* the kill, which could be the dead leader's last response. That gave impossible 10-30 ms failovers.
+- **Not tested:** power loss (only process kills; macOS `fsync` is not `F_FULLFSYNC`), network partitions in the real cluster (only in simulation), membership changes, snapshots/log compaction, a negative control for the real-cluster harness (the negative controls here are the simulation mutations; stage 2 has one for the storage engine).
+- Tests: 104 tests, 10/10 consecutive green runs (`results/stage8/test_10x.txt`); clippy -D warnings + fmt clean.
