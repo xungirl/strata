@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::json;
-use strata_server::engine::{Engine, EngineConfig};
+use strata_server::engine::{Engine, EngineConfig, IngestDoc};
 use strata_server::grpc::pb::strata_client::StrataClient;
 use strata_server::grpc::pb::strata_server::StrataServer;
 use strata_server::grpc::{pb, GrpcService};
@@ -294,5 +294,102 @@ fn vector_store_survives_restart_and_torn_tail() {
     assert!(
         vs.search(&[1.0, 0.0], 1).is_err(),
         "wrong dimension rejected"
+    );
+}
+
+/// Stage 7: two half-index engines scored with merged (global) statistics
+/// return exactly the scores of one engine holding every document.
+#[test]
+fn global_stats_make_shards_score_like_one_node() {
+    use strata_query::ScoringStats;
+    use strata_server::engine::{SearchRequest, StatsRequest};
+    let (d_all, d0, d1) = (
+        TempDir::new("gs-all"),
+        TempDir::new("gs-0"),
+        TempDir::new("gs-1"),
+    );
+    let (all, s0, s1) = (engine(&d_all), engine(&d0), engine(&d1));
+    let texts = [
+        "rust search engine with bm25",
+        "python web framework",
+        "search engines rank documents",
+        "rust ownership and borrowing",
+        "a vector search engine",
+        "bm25 is a ranking function",
+        "web search at scale",
+        "engine engine engine",
+    ];
+    let mut halves = (Vec::new(), Vec::new());
+    for (i, t) in texts.iter().enumerate() {
+        let d = IngestDoc {
+            id: format!("d{i}"),
+            text: t.to_string(),
+            fields: Default::default(),
+            vector: None,
+        };
+        if i % 2 == 0 {
+            halves.0.push(d.clone());
+        } else {
+            halves.1.push(d.clone());
+        }
+        all.ingest(vec![d]).unwrap();
+    }
+    s0.ingest(halves.0).unwrap();
+    s1.ingest(halves.1).unwrap();
+    for e in [&all, &s0, &s1] {
+        e.commit().unwrap();
+    }
+    let mut local_differs = 0;
+    for q in [
+        "search engine",
+        "rust bm25",
+        "web",
+        "engine ranking function",
+    ] {
+        let sreq = StatsRequest {
+            query: q.into(),
+            plain: true,
+        };
+        let global = ScoringStats::merge(&[
+            s0.scoring_stats(&sreq).unwrap(),
+            s1.scoring_stats(&sreq).unwrap(),
+        ]);
+        let req = |g: Option<ScoringStats>| SearchRequest {
+            query: q.into(),
+            k: 100,
+            mode: Default::default(),
+            vector: None,
+            plain: true,
+            global_stats: g,
+        };
+        let mut sharded: Vec<(String, u32)> = [&s0, &s1]
+            .iter()
+            .flat_map(|e| e.search(&req(Some(global.clone()))).unwrap().hits)
+            .map(|h| (h.id, h.score.to_bits()))
+            .collect();
+        let mut single: Vec<(String, u32)> = all
+            .search(&req(None))
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|h| (h.id, h.score.to_bits()))
+            .collect();
+        sharded.sort();
+        single.sort();
+        assert_eq!(sharded, single, "query {q:?}");
+        // Negative control: local-only statistics give different scores.
+        let mut local: Vec<(String, u32)> = [&s0, &s1]
+            .iter()
+            .flat_map(|e| e.search(&req(None)).unwrap().hits)
+            .map(|h| (h.id, h.score.to_bits()))
+            .collect();
+        local.sort();
+        if local != single {
+            local_differs += 1;
+        }
+    }
+    assert!(
+        local_differs > 0,
+        "test would not detect missing global stats"
     );
 }

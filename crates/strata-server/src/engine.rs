@@ -10,7 +10,8 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use strata_core::analyzer::{Analyzer, AnalyzerConfig};
 use strata_core::scoring::Bm25Params;
-use strata_query::{parse, search, Strategy};
+use strata_core::search::Query;
+use strata_query::{parse, search, search_with_stats, BoolQuery, Clause, ScoringStats, Strategy};
 use strata_storage::{Document, Fields, Index, IndexConfig};
 use strata_vector::HnswConfig;
 
@@ -57,6 +58,22 @@ pub struct SearchRequest {
     pub mode: Mode,
     #[serde(default)]
     pub vector: Option<Vec<f32>>,
+    /// Treat `query` as plain text (a bag of words, exactly like the BEIR
+    /// runs of stages 1-5) instead of the query language.
+    #[serde(default)]
+    pub plain: bool,
+    /// Cluster-wide scoring statistics (sent by the coordinator, stage 7).
+    /// Without them the node uses its own.
+    #[serde(default)]
+    pub global_stats: Option<ScoringStats>,
+}
+
+/// Body of `POST /v1/stats`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StatsRequest {
+    pub query: String,
+    #[serde(default)]
+    pub plain: bool,
 }
 
 fn default_k() -> usize {
@@ -166,10 +183,10 @@ impl Engine {
         let start = Instant::now();
         let k = req.k.clamp(1, 1000);
         let hits = match req.mode {
-            Mode::Lexical => self.lexical(&req.query, k)?,
+            Mode::Lexical => self.lexical(req, k)?,
             Mode::Dense => self.dense(req, k)?,
             Mode::Hybrid => {
-                let lex = self.lexical(&req.query, FUSION_DEPTH.max(k))?;
+                let lex = self.lexical(req, FUSION_DEPTH.max(k))?;
                 let den = self.dense(req, FUSION_DEPTH.max(k))?;
                 rrf(&[lex, den], k)
             }
@@ -180,16 +197,64 @@ impl Engine {
         })
     }
 
-    fn lexical(&self, query: &str, k: usize) -> Result<Vec<SearchHit>> {
-        let q = parse(query, &self.analyzer)?;
+    /// Run an already-built boolean query (lexical) and return id + score.
+    pub fn search_bool(&self, q: &BoolQuery, k: usize) -> Result<Vec<SearchHit>> {
         let snap = self.index.snapshot();
-        Ok(search(&snap, &q, self.params, k, Strategy::Auto)?
+        Ok(
+            search(&snap, q, self.params, k.clamp(1, 1000), Strategy::Auto)?
+                .iter()
+                .map(|h| SearchHit {
+                    id: snap.external_id(h).to_string(),
+                    score: h.score,
+                })
+                .collect(),
+        )
+    }
+
+    /// Parse a request's query text (query language, or plain bag of words).
+    pub fn parse_query(&self, query: &str, plain: bool) -> Result<BoolQuery> {
+        if plain {
+            let q = Query::bag_of_words(&self.analyzer, query);
+            return Ok(BoolQuery {
+                should: q
+                    .terms()
+                    .iter()
+                    .map(|t| Clause::Term {
+                        term: t.term.clone(),
+                        count: t.count,
+                    })
+                    .collect(),
+                ..Default::default()
+            });
+        }
+        parse(query, &self.analyzer)
+    }
+
+    fn lexical(&self, req: &SearchRequest, k: usize) -> Result<Vec<SearchHit>> {
+        let q = self.parse_query(&req.query, req.plain)?;
+        let snap = self.index.snapshot();
+        let hits = match &req.global_stats {
+            Some(stats) => search_with_stats(&snap, &q, self.params, k, Strategy::Auto, stats)?,
+            None => search(&snap, &q, self.params, k, Strategy::Auto)?,
+        };
+        Ok(hits
             .iter()
             .map(|h| SearchHit {
                 id: snap.external_id(h).to_string(),
                 score: h.score,
             })
             .collect())
+    }
+
+    /// This node's local scoring statistics for a query's terms (phase 1 of
+    /// a distributed search).
+    pub fn scoring_stats(&self, req: &StatsRequest) -> Result<ScoringStats> {
+        let q = self.parse_query(&req.query, req.plain)?;
+        let terms = q.scoring_terms();
+        Ok(ScoringStats::local(
+            &self.index.snapshot(),
+            terms.iter().map(String::as_str),
+        ))
     }
 
     fn dense(&self, req: &SearchRequest, k: usize) -> Result<Vec<SearchHit>> {

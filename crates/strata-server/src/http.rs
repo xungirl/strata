@@ -4,7 +4,8 @@
 //! POST   /v1/documents        {"docs": [{"id", "text", "fields"?, "vector"?}]}  -> {"seq", "accepted"}
 //! DELETE /v1/documents/{id}                                                    -> {"seq"}
 //! POST   /v1/commit                                                            -> {"segments", "live_docs"}
-//! POST   /v1/search           {"query", "k"?, "mode"?, "vector"?}               -> {"hits", "took_us"}
+//! POST   /v1/search           {"query", "k"?, "mode"?, "vector"?, "plain"?, "global_stats"?} -> {"hits", "took_us"}
+//! POST   /v1/stats            {"query", "plain"?}  -> local {"num_docs", "total_tokens", "df"} (distributed IDF)
 //! GET    /metrics             Prometheus text format
 //! GET    /healthz
 //! ```
@@ -23,8 +24,9 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::engine::{Engine, IngestDoc, SearchRequest, SearchResponse};
+use crate::engine::{Engine, IngestDoc, SearchRequest, SearchResponse, StatsRequest};
 use crate::metrics::Metrics;
+use strata_query::ScoringStats;
 
 /// Fault injection for distributed-systems experiments: delay a fraction
 /// of search requests.
@@ -47,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/documents/{id}", delete(remove))
         .route("/v1/commit", post(commit))
         .route("/v1/search", post(search))
+        .route("/v1/stats", post(stats))
         .route("/metrics", get(metrics))
         .route("/healthz", get(|| async { "ok" }))
         // Bulk ingest batches with embeddings are large (500 docs x 384
@@ -142,6 +145,16 @@ async fn search(
     let engine = s.engine.clone();
     Ok(Json(
         timed(&s.metrics, "search", move || engine.search(&req)).await?,
+    ))
+}
+
+async fn stats(
+    State(s): State<AppState>,
+    Json(req): Json<StatsRequest>,
+) -> Result<Json<ScoringStats>, ApiError> {
+    let engine = s.engine.clone();
+    Ok(Json(
+        timed(&s.metrics, "stats", move || engine.scoring_stats(&req)).await?,
     ))
 }
 

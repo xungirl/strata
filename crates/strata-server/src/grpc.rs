@@ -101,6 +101,8 @@ impl Strata for GrpcService {
             k: if r.k == 0 { 10 } else { r.k as usize },
             mode,
             vector: (!r.vector.is_empty()).then_some(r.vector),
+            plain: false,
+            global_stats: None,
         };
         let engine = self.engine.clone();
         let start = std::time::Instant::now();
