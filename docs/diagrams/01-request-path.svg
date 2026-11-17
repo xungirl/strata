@@ -1,0 +1,328 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="0 0 1600 1200">
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#EAE4DC" stroke-width="1"/>
+    </pattern>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#8A7F74" flood-opacity="0.14"/>
+    </filter>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8C857D"/>
+    </marker>
+    <marker id="aw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#B5847F"/>
+    </marker>
+    <marker id="aq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7A93A8"/>
+    </marker>
+    <marker id="am" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9A8AA6"/>
+    </marker>
+    <style>
+      .t  { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; fill: #3F3A35; }
+      .m  { font-family: 'SF Mono', Menlo, Consolas, monospace; fill: #7D756C; }
+      .h  { font-size: 19px; font-weight: 700; }
+      .s  { font-size: 13.5px; }
+      .xs { font-size: 12px; }
+      .cap { font-size: 11.5px; letter-spacing: 2px; fill: #9A9087; }
+      .panel { fill: #FBF9F6; stroke: #DCD3C8; stroke-width: 1.5; }
+      .chip  { fill: #F5F1EB; stroke: #DCD3C8; stroke-width: 1; }
+      .wire  { stroke: #8C857D; stroke-width: 2; fill: none; }
+      .lw { fill: #F6ECEA; stroke: #D9B9B5; stroke-width: 1.2; }
+      .lq { fill: #EAF0F4; stroke: #B3C3D0; stroke-width: 1.2; }
+      .ww { stroke: #B5847F; stroke-width: 1.6; fill: none; stroke-dasharray: 4 4; }
+      .wq { stroke: #7A93A8; stroke-width: 1.6; fill: none; stroke-dasharray: 4 4; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1200" fill="#F4F0EA"/>
+  <rect width="1600" height="1200" fill="url(#grid)"/>
+
+  <!-- header -->
+  <text x="40" y="48" class="m cap" style="fill:#A08479">STRATA · 01 / REQUEST PATH</text>
+  <text x="40" y="90" class="t" font-size="34" font-weight="800">How a write and a query travel through strata</text>
+  <text x="40" y="122" class="m s">Rust · 8 crates · segment index + HNSW + RRF · scatter-gather coordinator · own Raft · MCP</text>
+  <g transform="translate(1180,40)">
+    <rect width="380" height="78" rx="10" class="panel"/>
+    <rect x="18" y="20" width="26" height="10" rx="3" fill="#D9B9B5"/>
+    <text x="54" y="30" class="m xs">write path  W1–W6 (left lane)</text>
+    <rect x="18" y="46" width="26" height="10" rx="3" fill="#B3C3D0"/>
+    <text x="54" y="56" class="m xs">query path  Q1–Q6 (right lane)</text>
+  </g>
+
+  <!-- ============ LANES ============ -->
+  <text x="40" y="158" class="m cap" style="fill:#B5847F">WRITE</text>
+  <text x="1560" y="158" class="m cap" text-anchor="end" style="fill:#7A93A8">QUERY</text>
+
+  <!-- write lane -->
+  <g class="m xs">
+    <rect x="40" y="172" width="205" height="62" rx="9" class="lw"/>
+    <text x="54" y="194" style="fill:#9C6E69;font-weight:700">W1</text>
+    <text x="54" y="212">POST /v1/documents</text>
+    <text x="54" y="227">(batch of docs)</text>
+
+    <rect x="40" y="290" width="205" height="112" rx="9" class="lw"/>
+    <text x="54" y="312" style="fill:#9C6E69;font-weight:700">W2</text>
+    <text x="54" y="330">route by</text>
+    <text x="54" y="346">FNV-1a(id) % shards,</text>
+    <text x="54" y="362">write every replica</text>
+    <text x="54" y="378">of that shard</text>
+    <text x="54" y="394">(stage 7)</text>
+
+    <rect x="40" y="450" width="205" height="120" rx="9" class="lw"/>
+    <text x="54" y="472" style="fill:#9C6E69;font-weight:700">W3 · Raft node</text>
+    <text x="54" y="490">batch = 1 log entry,</text>
+    <text x="54" y="506">fsync on a majority,</text>
+    <text x="54" y="522">then the applier</text>
+    <text x="54" y="538">thread applies it</text>
+    <text x="54" y="556">(stage 8)</text>
+
+    <rect x="40" y="630" width="205" height="112" rx="9" class="lw"/>
+    <text x="54" y="652" style="fill:#9C6E69;font-weight:700">W4</text>
+    <text x="54" y="670">Index::add_docs</text>
+    <text x="54" y="686">text → postings +</text>
+    <text x="54" y="702">positions; fields →</text>
+    <text x="54" y="718">columns; vectors →</text>
+    <text x="54" y="734">vectors.log + HNSW</text>
+
+    <rect x="40" y="808" width="205" height="128" rx="9" class="lw"/>
+    <text x="54" y="830" style="fill:#9C6E69;font-weight:700">W5</text>
+    <text x="54" y="848">WAL append, 1 fsync</text>
+    <text x="54" y="864">per batch → ACK.</text>
+    <text x="54" y="880">commit: buffer → new</text>
+    <text x="54" y="896">segment, fsync,</text>
+    <text x="54" y="912">manifest rename,</text>
+    <text x="54" y="928">publish snapshot</text>
+
+    <rect x="40" y="980" width="205" height="80" rx="9" class="lw"/>
+    <text x="54" y="1002" style="fill:#9C6E69;font-weight:700">W6 · background</text>
+    <text x="54" y="1020">merge same-tier</text>
+    <text x="54" y="1036">adjacent segments,</text>
+    <text x="54" y="1052">drop deleted docs</text>
+  </g>
+
+  <!-- query lane -->
+  <g class="m xs">
+    <rect x="1355" y="172" width="205" height="62" rx="9" class="lq"/>
+    <text x="1369" y="194" style="fill:#5F7A90;font-weight:700">Q1</text>
+    <text x="1369" y="212">POST /v1/search</text>
+    <text x="1369" y="227">text · query · vector</text>
+
+    <rect x="1355" y="290" width="205" height="112" rx="9" class="lq"/>
+    <text x="1369" y="312" style="fill:#5F7A90;font-weight:700">Q2 · two phases</text>
+    <text x="1369" y="330">1. /v1/stats → sum</text>
+    <text x="1369" y="346">   N, tokens, df</text>
+    <text x="1369" y="362">2. /v1/search with</text>
+    <text x="1369" y="378">   global stats, merge</text>
+    <text x="1369" y="394">   by (score, id)</text>
+
+    <rect x="1355" y="450" width="205" height="120" rx="9" class="lq"/>
+    <text x="1369" y="472" style="fill:#5F7A90;font-weight:700">Q3</text>
+    <text x="1369" y="490">1 replica round-robin,</text>
+    <text x="1369" y="506">hedge to a 2nd after</text>
+    <text x="1369" y="522">--hedge-ms; deadline</text>
+    <text x="1369" y="538">→ partial: true.</text>
+    <text x="1369" y="556">Raft: ReadIndex</text>
+
+    <rect x="1355" y="630" width="205" height="112" rx="9" class="lq"/>
+    <text x="1369" y="652" style="fill:#5F7A90;font-weight:700">Q4</text>
+    <text x="1369" y="670">lexical: MaxScore /</text>
+    <text x="1369" y="686">block-max WAND</text>
+    <text x="1369" y="702">dense: HNSW (int8 +</text>
+    <text x="1369" y="718">f32 rescore)</text>
+    <text x="1369" y="734">hybrid: RRF top-100</text>
+
+    <rect x="1355" y="808" width="205" height="128" rx="9" class="lq"/>
+    <text x="1369" y="830" style="fill:#5F7A90;font-weight:700">Q5</text>
+    <text x="1369" y="848">clone Arc&lt;Snapshot&gt;:</text>
+    <text x="1369" y="864">isolated from writes</text>
+    <text x="1369" y="880">and merges; filters</text>
+    <text x="1369" y="896">checked per candidate</text>
+    <text x="1369" y="912">against columns +</text>
+    <text x="1369" y="928">tombstones</text>
+
+    <rect x="1355" y="980" width="205" height="80" rx="9" class="lq"/>
+    <text x="1369" y="1002" style="fill:#5F7A90;font-weight:700">Q6</text>
+    <text x="1369" y="1020">parse with the same</text>
+    <text x="1369" y="1036">analyzer; BM25 block</text>
+    <text x="1369" y="1052">bounds from skip table</text>
+  </g>
+
+  <!-- lane connectors -->
+  <g>
+    <path d="M245 203 H268" class="ww"/><path d="M245 346 H268" class="ww"/>
+    <path d="M245 510 H268" class="ww"/><path d="M245 686 H268" class="ww"/>
+    <path d="M245 872 H268" class="ww"/><path d="M245 1020 H268" class="ww"/>
+    <path d="M1332 203 H1355" class="wq"/><path d="M1332 346 H1355" class="wq"/>
+    <path d="M1332 510 H1355" class="wq"/><path d="M1332 686 H1355" class="wq"/>
+    <path d="M1332 872 H1355" class="wq"/><path d="M1332 1020 H1355" class="wq"/>
+  </g>
+
+  <!-- ============ CENTER ============ -->
+
+  <!-- row 1: clients -->
+  <text x="270" y="158" class="m cap">CLIENTS</text>
+  <g filter="url(#sh)">
+    <rect x="270" y="172" width="250" height="62" rx="10" class="panel" style="stroke:#CDB98F"/>
+    <rect x="540" y="172" width="250" height="62" rx="10" class="panel" style="stroke:#CDB98F"/>
+    <rect x="810" y="172" width="250" height="62" rx="10" class="panel" style="stroke:#CDB98F"/>
+    <rect x="1080" y="172" width="250" height="62" rx="10" class="panel" style="stroke:#B8A8C2"/>
+  </g>
+  <text x="290" y="200" class="t h">HTTP / JSON</text><text x="290" y="221" class="m xs">axum 0.8</text>
+  <text x="560" y="200" class="t h">gRPC</text><text x="560" y="221" class="m xs">tonic · strata.proto</text>
+  <text x="830" y="200" class="t h">strata-load</text><text x="830" y="221" class="m xs">open + closed loop bench</text>
+  <text x="1100" y="200" class="t h">AI agent</text><text x="1100" y="221" class="m xs">MCP over stdio</text>
+
+  <!-- row 2: coordinator + mcp -->
+  <text x="270" y="276" class="m cap">ROUTING · stage 7 / 9</text>
+  <rect x="270" y="290" width="760" height="112" rx="12" class="panel" style="stroke:#9FB2C2;stroke-width:2" filter="url(#sh)"/>
+  <rect x="270" y="290" width="8" height="112" rx="4" fill="#9FB2C2"/>
+  <text x="294" y="320" class="t h">strata-coord</text>
+  <text x="420" y="320" class="m xs">stateless coordinator</text>
+  <g class="m xs">
+    <rect x="294" y="336" width="168" height="50" rx="8" class="chip"/>
+    <text x="306" y="356" style="fill:#4F6A80">writes</text><text x="306" y="374">FNV-1a(id) % N</text>
+    <rect x="474" y="336" width="200" height="50" rx="8" class="chip"/>
+    <text x="486" y="356" style="fill:#4F6A80">search: phase 1</text><text x="486" y="374">gather N / df</text>
+    <rect x="686" y="336" width="160" height="50" rx="8" class="chip"/>
+    <text x="698" y="356" style="fill:#4F6A80">phase 2</text><text x="698" y="374">top-k, merge</text>
+    <rect x="858" y="336" width="156" height="50" rx="8" class="chip"/>
+    <text x="870" y="356" style="fill:#4F6A80">tail latency</text><text x="870" y="374">hedge · deadline</text>
+  </g>
+
+  <rect x="1050" y="290" width="280" height="112" rx="12" class="panel" style="stroke:#B8A8C2;stroke-width:2" filter="url(#sh)"/>
+  <rect x="1050" y="290" width="8" height="112" rx="4" fill="#B8A8C2"/>
+  <text x="1074" y="320" class="t h">strata-mcp</text>
+  <text x="1074" y="344" class="m xs">remember · recall · search</text>
+  <text x="1074" y="361" class="m xs">forget · memory_stats</text>
+  <text x="1074" y="384" class="m xs" style="fill:#8B7A98">memories.jsonl (fsync)</text>
+
+  <!-- row 3: shard -->
+  <text x="270" y="436" class="m cap">PER SHARD · stage 6 / 8</text>
+  <rect x="270" y="450" width="880" height="120" rx="12" class="panel" style="stroke:#A7BBA9;stroke-width:2" filter="url(#sh)"/>
+  <rect x="270" y="450" width="8" height="120" rx="4" fill="#A7BBA9"/>
+  <text x="294" y="480" class="t h">replicas</text>
+  <text x="380" y="480" class="m xs">strata-server (HTTP + gRPC + /metrics + tracing) · or strata-raft-node × 3</text>
+  <g>
+    <circle cx="324" cy="526" r="22" fill="#DCE6DC" stroke="#8FA892" stroke-width="2"/>
+    <text x="324" y="530" class="m xs" text-anchor="middle" style="fill:#55705A;font-weight:700">L</text>
+    <circle cx="384" cy="526" r="18" fill="#F0F3EE" stroke="#B6C6B7" stroke-width="1.5"/>
+    <text x="384" y="530" class="m xs" text-anchor="middle">F</text>
+    <circle cx="434" cy="526" r="18" fill="#F0F3EE" stroke="#B6C6B7" stroke-width="1.5"/>
+    <text x="434" y="530" class="m xs" text-anchor="middle">F</text>
+    <path d="M346 526 H364" class="wire" style="stroke:#A7BBA9" marker-end="url(#a)"/>
+  </g>
+  <g class="m xs">
+    <text x="476" y="506" style="fill:#55705A">Raft Ready, in this order:</text>
+    <rect x="476" y="516" width="150" height="38" rx="8" class="chip"/>
+    <text x="488" y="539">1 persist + fsync</text>
+    <path d="M626 535 H644" class="wire" marker-end="url(#a)"/>
+    <rect x="646" y="516" width="120" height="38" rx="8" class="chip"/>
+    <text x="658" y="539">2 send msgs</text>
+    <path d="M766 535 H784" class="wire" marker-end="url(#a)"/>
+    <rect x="786" y="516" width="175" height="38" rx="8" class="chip"/>
+    <text x="798" y="539">3 apply (own thread)</text>
+    <path d="M961 535 H979" class="wire" marker-end="url(#a)"/>
+    <rect x="981" y="516" width="160" height="38" rx="8" class="chip"/>
+    <text x="993" y="539">4 ReadIndex reads</text>
+  </g>
+
+  <!-- honesty note under shard -->
+  <text x="294" y="592" class="m xs" style="fill:#A08479">note: strata-raft-node is a separate binary, not yet wired behind strata-coord (stage 7 writes all replicas)</text>
+
+  <!-- row 4: engine -->
+  <text x="270" y="616" class="m cap">ENGINE · crates/strata-server/src/engine.rs</text>
+  <rect x="270" y="630" width="1060" height="112" rx="12" class="panel" filter="url(#sh)"/>
+  <rect x="290" y="646" width="340" height="82" rx="10" fill="#F6ECE6" stroke="#D3B3A2" stroke-width="1.5"/>
+  <text x="306" y="672" class="t" font-size="16" font-weight="700">lexical · strata-query</text>
+  <text x="306" y="694" class="m xs">parser → BoolQuery · MaxScore / BMW</text>
+  <text x="306" y="712" class="m xs">phrase · prefix (FST) · filters</text>
+
+  <rect x="650" y="646" width="320" height="82" rx="10" fill="#EEEBF2" stroke="#B8A8C2" stroke-width="1.5"/>
+  <text x="666" y="672" class="t" font-size="16" font-weight="700">dense · strata-vector</text>
+  <text x="666" y="694" class="m xs">HNSW · NEON f32 dot · int8 codes</text>
+  <text x="666" y="712" class="m xs">exact scan for tiny filter sets</text>
+
+  <rect x="990" y="646" width="320" height="82" rx="10" fill="#F3EEDF" stroke="#CDB98F" stroke-width="1.5"/>
+  <text x="1006" y="672" class="t" font-size="16" font-weight="700">hybrid · strata-eval fusion</text>
+  <text x="1006" y="694" class="m xs">RRF (k = 60) of lexical + dense</text>
+  <text x="1006" y="712" class="m xs">top-100 lists</text>
+    
+  <!-- row 5: storage -->
+  <text x="270" y="794" class="m cap">STORAGE · strata-storage · stage 2</text>
+  <rect x="270" y="808" width="1060" height="128" rx="12" class="panel" style="stroke:#B9B2A8;stroke-width:2" filter="url(#sh)"/>
+  <g class="m xs">
+    <rect x="290" y="826" width="170" height="64" rx="9" class="chip" style="fill:#F6ECEA;stroke:#D9B9B5"/>
+    <text x="302" y="850" class="t" font-size="14" font-weight="700">WAL</text>
+    <text x="302" y="870">CRC per record</text>
+    <text x="302" y="884">group commit</text>
+    <path d="M460 858 H482" class="wire" marker-end="url(#a)"/>
+
+    <rect x="484" y="826" width="170" height="64" rx="9" class="chip"/>
+    <text x="496" y="850" class="t" font-size="14" font-weight="700">write buffer</text>
+    <text x="496" y="870">analyzed postings</text>
+    <text x="496" y="884">in memory</text>
+    <path d="M654 858 H676" class="wire" marker-end="url(#a)"/>
+
+    <rect x="678" y="826" width="230" height="64" rx="9" class="chip"/>
+    <text x="690" y="850" class="t" font-size="14" font-weight="700">immutable segments</text>
+    <text x="690" y="870">mmap · FST dict · 128-doc</text>
+    <text x="690" y="884">bit-packed blocks + skips</text>
+    <path d="M908 858 H930" class="wire" marker-end="url(#a)"/>
+
+    <rect x="932" y="826" width="170" height="64" rx="9" class="chip"/>
+    <text x="944" y="850" class="t" font-size="14" font-weight="700">manifest.json</text>
+    <text x="944" y="870">atomic rename =</text>
+    <text x="944" y="884">the commit point</text>
+    <path d="M1102 858 H1124" class="wire" marker-end="url(#a)"/>
+
+    <rect x="1126" y="826" width="184" height="64" rx="9" class="chip" style="fill:#EAF0F4;stroke:#B3C3D0"/>
+    <text x="1138" y="850" class="t" font-size="14" font-weight="700">Arc&lt;Snapshot&gt;</text>
+    <text x="1138" y="870">lock-free readers</text>
+    <text x="1138" y="884">COW tombstones</text>
+
+    <text x="290" y="918">↻ background thread merges adjacent same-tier segments (4 at a time), keeping doc order → byte-identical results</text>
+  </g>
+
+  <!-- row 6: core -->
+  <text x="270" y="966" class="m cap">FOUNDATION · strata-core · stage 1</text>
+  <rect x="270" y="980" width="1060" height="80" rx="12" class="panel" style="stroke:#C9BFB3" filter="url(#sh)"/>
+  <g class="m xs">
+    <rect x="290" y="996" width="250" height="48" rx="8" class="chip"/>
+    <text x="302" y="1016" style="fill:#5C554E">Analyzer</text><text x="302" y="1033">UAX#29 → stopwords → Porter</text>
+    <rect x="556" y="996" width="220" height="48" rx="8" class="chip"/>
+    <text x="568" y="1016" style="fill:#5C554E">BM25</text><text x="568" y="1033">Lucene IDF, global stats</text>
+    <rect x="792" y="996" width="240" height="48" rx="8" class="chip"/>
+    <text x="804" y="1016" style="fill:#5C554E">SegmentReader trait</text><text x="804" y="1033">GAT postings iterator</text>
+    <rect x="1048" y="996" width="262" height="48" rx="8" class="chip"/>
+    <text x="1060" y="1016" style="fill:#5C554E">in-memory segment</text><text x="1060" y="1033">exact TAAT = the test oracle</text>
+  </g>
+
+  <!-- vertical wires -->
+  <path d="M650 234 V288" class="wire" marker-end="url(#a)"/>
+  <path d="M1205 234 V288" class="wire" style="stroke:#9A8AA6" marker-end="url(#am)"/>
+  <path d="M650 402 V448" class="wire" marker-end="url(#a)"/>
+  <text x="662" y="430" class="m xs">to every shard</text>
+  <path d="M760 570 V578" class="wire"/>
+  <path d="M760 600 V628" class="wire" marker-end="url(#a)"/>
+  <path d="M1240 402 V628" class="wire" style="stroke:#9A8AA6;stroke-dasharray:6 4" marker-end="url(#am)"/>
+  <text x="1252" y="500" class="m xs" style="fill:#8B7A98">embeds an</text>
+  <text x="1252" y="516" class="m xs" style="fill:#8B7A98">Engine</text>
+  <text x="1252" y="532" class="m xs" style="fill:#8B7A98">directly</text>
+  <path d="M640 742 V806" class="wire" marker-end="url(#a)"/>
+  <path d="M810 742 V770" class="wire" style="stroke:#B8A8C2"/>
+  <text x="822" y="768" class="m xs" style="fill:#8B7A98">vectors.log + in-memory HNSW (rebuilt at start)</text>
+  <path d="M800 936 V978" class="wire" marker-end="url(#a)"/>
+
+  <!-- footer: invariants -->
+  <rect x="40" y="1088" width="1520" height="80" rx="12" fill="#ECE6DE" stroke="#DCD3C8"/>
+  <text x="62" y="1114" class="m cap" style="fill:#8A7F74">INVARIANTS THE TESTS ENFORCE</text>
+  <g class="m xs" style="fill:#5C554E">
+    <text x="62" y="1140">pruned == exhaustive, bit for bit</text>
+    <text x="318" y="1140">disk + merges == stage-1 in-memory index</text>
+    <text x="636" y="1140">sharded (global stats) == single node</text>
+    <text x="934" y="1140">acked writes survive kill -9 (100 kills)</text>
+    <text x="1240" y="1140">0 acked writes lost / 75 leader kills</text>
+    <text x="62" y="1158" style="fill:#9A9087">Raft simulation: 300 randomized schedules, 6/6 injected bugs caught · metrics == pytrec_eval · exact kNN == numpy · source: docs/ARCHITECTURE.md, BENCHMARK.md</text>
+  </g>
+</svg>
